@@ -10,143 +10,82 @@ local function getUpgradeDefinition(upgradeId)
 		return nil
 	end
 
-	return UpgradeConfig.ById[upgradeId]
+	return UpgradeConfig.GetUpgradeById(upgradeId)
 end
 
-local function resolveUpgradeLevel(upgrades, upgradeId)
-	if typeof(upgrades) ~= "table" then
-		return 0
-	end
-
-	local level = upgrades[upgradeId]
-	if typeof(level) ~= "number" then
-		return 0
-	end
-
-	return math.max(level, 0)
-end
-
-local function validateUpgradeCost(upgrade, upgradeId, currentLevel)
-	if upgrade.maxLevel and currentLevel >= upgrade.maxLevel then
-		return false
-	end
-
-	local cost = UpgradeConfig.getUpgradeCost(upgradeId, currentLevel)
-	if typeof(cost) ~= "number" then
-		return false
-	end
-
-	return true, cost
-end
-
-local function cloneState(playerData)
-	if typeof(playerData) ~= "table" then
+local function ensurePlayerState(player)
+	local state = PlayerDataService.Get(player)
+	if typeof(state) ~= "table" then
 		return nil
 	end
 
-	return table.clone(playerData)
-end
-
-local function getCurrency(playerData)
-	if typeof(playerData.data) ~= "number" then
-		return 0
+	if typeof(state.upgrades) ~= "table" then
+		state.upgrades = {}
 	end
 
-	return playerData.data
-end
-
-local function ensureUpgradeTable(playerData)
-	if typeof(playerData.upgrades) ~= "table" then
-		playerData.upgrades = {}
+	if typeof(state.data) ~= "number" then
+		state.data = 0
 	end
 
-	return playerData.upgrades
+	return state
+end
+
+local function evaluatePurchase(state, upgradeId)
+	local definition = getUpgradeDefinition(upgradeId)
+	if not definition then
+		return false, nil, 0, "locked"
+	end
+
+	local upgrades = state.upgrades
+	local currentLevel = UpgradeConfig.GetLevel(upgrades, upgradeId)
+
+	if UpgradeConfig.IsMaxed(upgrades, upgradeId) then
+		return false, nil, currentLevel, "max"
+	end
+
+	if not UpgradeConfig.MeetsRequirements(upgrades, upgradeId) then
+		return false, nil, currentLevel, "locked"
+	end
+
+	local cost = UpgradeConfig.GetCost(upgradeId, currentLevel)
+	if typeof(cost) ~= "number" then
+		return false, nil, currentLevel, "locked"
+	end
+
+	if (state.data or 0) < cost then
+		return false, cost, currentLevel, "poor"
+	end
+
+	return true, cost, currentLevel, nil
 end
 
 function UpgradeService.CanBuy(player, upgradeId)
-	local upgrade = getUpgradeDefinition(upgradeId)
-	if not upgrade then
-		return false, nil
+	local state = ensurePlayerState(player)
+	if not state then
+		return false, "locked"
 	end
 
-	local playerData = PlayerDataService.Get(player)
-	if typeof(playerData) ~= "table" then
-		return false, nil
-	end
-
-	local upgrades = ensureUpgradeTable(playerData)
-	local currentLevel = resolveUpgradeLevel(upgrades, upgradeId)
-
-	local storageTier = UpgradeConfig.GetStorageTier(upgrades)
-	if upgrade.id == "sto_2" and resolveUpgradeLevel(upgrades, "sto_1") <= 0 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "sto_3" and resolveUpgradeLevel(upgrades, "sto_2") <= 0 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "cpu_2" and storageTier < 2 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "cpu_3" and storageTier < 3 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "ram_2" and storageTier < 2 then
-		return false, cloneState(playerData)
-	end
-
-	local canLevel, cost = validateUpgradeCost(upgrade, upgradeId, currentLevel)
-	if not canLevel then
-		return false, cloneState(playerData)
-	end
-
-	local currency = getCurrency(playerData)
-	if currency < cost then
-		return false, cloneState(playerData)
-	end
-
-	return true, cloneState(playerData)
+	local success, _, _, reason = evaluatePurchase(state, upgradeId)
+	return success, reason
 end
 
 function UpgradeService.Buy(player, upgradeId)
-	local upgrade = getUpgradeDefinition(upgradeId)
-	if not upgrade then
-		return false, nil
+	local state = ensurePlayerState(player)
+	if not state then
+		return false, "locked"
 	end
 
-	local playerData = PlayerDataService.Get(player)
-	if typeof(playerData) ~= "table" then
-		return false, nil
+	local success, cost, currentLevel, reason = evaluatePurchase(state, upgradeId)
+	if not success then
+		return false, reason
 	end
 
-	local upgrades = ensureUpgradeTable(playerData)
-	local currentLevel = resolveUpgradeLevel(upgrades, upgradeId)
-	local nextLevel = currentLevel + 1
+	state.data = (state.data or 0) - cost
+	state.upgrades[upgradeId] = currentLevel + 1
 
-	local canLevel, cost = validateUpgradeCost(upgrade, upgradeId, currentLevel)
-	if not canLevel then
-		return false, cloneState(playerData)
-	end
+	PlayerDataService.Set(player, state)
 
-	local storageTier = UpgradeConfig.GetStorageTier(upgrades)
-	if upgrade.id == "sto_2" and resolveUpgradeLevel(upgrades, "sto_1") <= 0 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "sto_3" and resolveUpgradeLevel(upgrades, "sto_2") <= 0 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "cpu_2" and storageTier < 2 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "cpu_3" and storageTier < 3 then
-		return false, cloneState(playerData)
-	elseif upgrade.id == "ram_2" and storageTier < 2 then
-		return false, cloneState(playerData)
-	end
-
-	local currency = getCurrency(playerData)
-	if currency < cost then
-		return false, cloneState(playerData)
-	end
-
-	playerData.data = currency - cost
-	upgrades[upgradeId] = nextLevel
-
-	PlayerDataService.Set(player, playerData)
-
-	return true, cloneState(playerData)
+	return true
 end
 
 return UpgradeService
