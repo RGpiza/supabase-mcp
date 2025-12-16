@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local GroupBonusService = require(script.Parent.GroupBonusService)
 local PremiumBonusService = require(script.Parent.PremiumBonusService)
+local BoostManager = require(script.Parent.BoostManager)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
 
 local ProductionService = {}
@@ -90,7 +91,7 @@ local function getPrestigeMultiplier(playerData)
 	return 1 + (corePower * PRESTIGE_BONUS)
 end
 
-function ProductionService.GetDataPerSecond(player)
+function ProductionService.GetBaseDataPerSecond(player)
 	local playerData = PlayerDataService.Get(player)
 	if typeof(playerData) ~= "table" then
 		return BASE_DPS
@@ -106,6 +107,12 @@ function ProductionService.GetDataPerSecond(player)
 	local premiumMultiplier = PremiumBonusService.GetPremiumMultiplier(player)
 
 	return (BASE_DPS + totalFlat) * totalMultiplier * prestigeMultiplier * groupMultiplier * premiumMultiplier
+end
+
+function ProductionService.GetDataPerSecond(player)
+	local baseProduction = ProductionService.GetBaseDataPerSecond(player)
+	local boostMultiplier = BoostManager.GetMultiplier(player)
+	return baseProduction * boostMultiplier
 end
 
 return ProductionService
