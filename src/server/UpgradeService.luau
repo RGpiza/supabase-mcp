@@ -99,12 +99,13 @@ end
 local function executePurchase(player, upgradeId, desiredQuantity)
 	local state = ensurePlayerState(player)
 	if not state then
-		return false, "locked", 0
+		return false, "locked", 0, 0
 	end
 
+	local startingData = state.data or 0
 	local quantity, remainingData, resultingLevel, reason = planPurchase(state, upgradeId, desiredQuantity)
 	if quantity <= 0 then
-		return false, reason or "locked", 0
+		return false, reason or "locked", 0, 0
 	end
 
 	state.data = remainingData
@@ -112,7 +113,8 @@ local function executePurchase(player, upgradeId, desiredQuantity)
 
 	PlayerDataService.Set(player, state)
 
-	return true, quantity
+	local spent = math.max(0, startingData - remainingData)
+	return true, quantity, spent
 end
 
 function UpgradeService.CanBuy(player, upgradeId)
@@ -126,17 +128,17 @@ function UpgradeService.CanBuy(player, upgradeId)
 end
 
 function UpgradeService.Buy(player, upgradeId)
-	local success, reasonOrQuantity = executePurchase(player, upgradeId, 1)
+	local success, reasonOrQuantity, spent = executePurchase(player, upgradeId, 1)
 	if not success then
 		return false, reasonOrQuantity
 	end
 
-	return true, reasonOrQuantity
+	return true, reasonOrQuantity, spent
 end
 
 function UpgradeService.BuyMax(player, upgradeId)
-	local success, purchased = executePurchase(player, upgradeId, nil)
-	return success, purchased
+	local success, purchased, spent = executePurchase(player, upgradeId, nil)
+	return success, purchased, spent
 end
 
 return UpgradeService

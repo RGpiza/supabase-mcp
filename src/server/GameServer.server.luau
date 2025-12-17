@@ -55,6 +55,7 @@ local GlobalStatsService = require(script.Parent.GlobalStatsService)
 local EconomyAnalytics = require(script.Parent.EconomyAnalytics)
 local OfflineProgress = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("OfflineProgress"))
 local AnalyticsLogger = require(script.Parent.AnalyticsLogger)
+local AutomationService = require(script.Parent.AutomationService)
 
 local activePlayers = {}
 local productionLoopStarted = false

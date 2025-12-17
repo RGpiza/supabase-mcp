@@ -1,11 +1,14 @@
 local Players = game:GetService("Players")
 local DataStoreService = game:GetService("DataStoreService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = {}
 
 local DATASTORE_NAME = "PlayerProgress"
 local MAX_RETRIES = 3
 local RETRY_DELAY = 2
+
+local AutomationConfig = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("AutomationConfig"))
 
 local defaultData = {
 	data = 0,
@@ -17,6 +20,12 @@ local defaultData = {
 	ownedPasses = {},
 	lastSeen = 0,
 	globalMilestones = {},
+	automation = {
+		enabled = {},
+		priority = AutomationConfig.GetDefaultPriority(),
+		speedTier = 0,
+		presets = AutomationConfig.GetDefaultPresets(),
+	},
 }
 
 local playerCache = {}
@@ -120,6 +129,91 @@ local function sanitizeBooleanTable(source)
 	return cleaned
 end
 
+local function sanitizeAutomation(payload)
+	local sanitized = {
+		enabled = {},
+		priority = AutomationConfig.GetDefaultPriority(),
+		speedTier = 0,
+		presets = AutomationConfig.GetDefaultPresets(),
+	}
+
+	if typeof(payload) ~= "table" then
+		return sanitized
+	end
+
+	if typeof(payload.enabled) == "table" then
+		for _, definition in ipairs(AutomationConfig.GetAll()) do
+			local value = payload.enabled[definition.id]
+			if value ~= nil then
+				sanitized.enabled[definition.id] = value == true
+			end
+		end
+	end
+
+	local priorityList = {}
+	if typeof(payload.priority) == "table" then
+		for _, automationId in ipairs(payload.priority) do
+			if typeof(automationId) == "string" and not table.find(priorityList, automationId) then
+				table.insert(priorityList, automationId)
+			end
+		end
+	end
+
+	for _, definition in ipairs(AutomationConfig.GetAll()) do
+		if not table.find(priorityList, definition.id) then
+			table.insert(priorityList, definition.id)
+		end
+	end
+	sanitized.priority = priorityList
+
+	local tier = payload.speedTier
+	if typeof(tier) ~= "number" then
+		tier = 0
+	end
+	sanitized.speedTier = math.clamp(math.floor(tier + 0.5), 0, AutomationConfig.GetMaxSpeedTier())
+
+	if typeof(payload.presets) == "table" then
+		local defaults = AutomationConfig.GetDefaultPresets()
+		for index = 1, AutomationConfig.GetPresetSlotCount() do
+			local incoming = payload.presets[index]
+			local base = defaults[index]
+			if typeof(incoming) == "table" and typeof(base) == "table" then
+				local preset = {
+					name = typeof(incoming.name) == "string" and string.sub(incoming.name, 1, 24) or base.name,
+					enabled = {},
+					priority = {},
+					speedTier = typeof(incoming.speedTier) == "number" and math.clamp(math.floor(incoming.speedTier + 0.5), 0, AutomationConfig.GetMaxSpeedTier()) or base.speedTier,
+				}
+
+				if typeof(incoming.enabled) == "table" then
+					for _, definition in ipairs(AutomationConfig.GetAll()) do
+						preset.enabled[definition.id] = incoming.enabled[definition.id] == true
+					end
+				else
+					preset.enabled = table.clone(base.enabled)
+				end
+
+				if typeof(incoming.priority) == "table" then
+					for _, automationId in ipairs(incoming.priority) do
+						if typeof(automationId) == "string" and not table.find(preset.priority, automationId) then
+							table.insert(preset.priority, automationId)
+						end
+					end
+				end
+				for _, definition in ipairs(AutomationConfig.GetAll()) do
+					if not table.find(preset.priority, definition.id) then
+						table.insert(preset.priority, definition.id)
+					end
+				end
+
+				sanitized.presets[index] = preset
+			end
+		end
+	end
+
+	return sanitized
+end
+
 local function sanitizeGlobalMilestones(payload)
 	local sanitized = {}
 	if typeof(payload) ~= "table" then
@@ -164,6 +258,7 @@ local function sanitizeData(payload)
 	sanitized.boosts = sanitizeBoosts(payload.boosts)
 	sanitized.ownedPasses = sanitizeOwnedPasses(payload.ownedPasses)
 	sanitized.globalMilestones = sanitizeGlobalMilestones(payload.globalMilestones)
+	sanitized.automation = sanitizeAutomation(payload.automation)
 	if typeof(payload.lastSeen) == "number" then
 		sanitized.lastSeen = payload.lastSeen
 	else
