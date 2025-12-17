@@ -473,6 +473,458 @@ function LoadingInitializer.Init()
 	local boostController = BoostUIController.Init(context)
 	local showToast = toastController and toastController.ShowToast or function() end
 
+	local sessionBonusPanel
+	local sessionBonusProgressFill
+	local sessionBonusProgressLabel
+	local sessionBonusTargetSeconds = 20 * 60
+	local globalStatsPanel
+	local globalStatsDataValue
+	local globalStatsPrestigeValue
+	local serverPowerPanel
+	local serverPowerLabel
+
+	local function ensureSessionBonusUI()
+		if sessionBonusPanel and sessionBonusPanel.Parent == rightPanel then
+			return
+		end
+		if not rightPanel then
+			return
+		end
+
+		local panel = rightPanel:FindFirstChild("SessionBonusPanel")
+		if not (panel and panel:IsA("Frame")) then
+			panel = Instance.new("Frame")
+			panel.Name = "SessionBonusPanel"
+			panel.Parent = rightPanel
+		end
+
+		panel.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
+		panel.BackgroundTransparency = 0.1
+		panel.Size = UDim2.new(1, -10, 0, 80)
+		panel.Position = UDim2.new(0, 5, 0, 0)
+		panel.AnchorPoint = Vector2.new(0, 0)
+		panel.BorderSizePixel = 0
+		panel.LayoutOrder = -2
+		panel.Visible = true
+
+		local panelCorner = panel:FindFirstChildOfClass("UICorner")
+		if not panelCorner then
+			panelCorner = Instance.new("UICorner")
+			panelCorner.Parent = panel
+		end
+		panelCorner.CornerRadius = UDim.new(0, 8)
+
+		local stroke = panel:FindFirstChildOfClass("UIStroke")
+		if not stroke then
+			stroke = Instance.new("UIStroke")
+			stroke.Parent = panel
+		end
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Color = Color3.fromRGB(70, 90, 110)
+		stroke.Thickness = 1
+		stroke.Transparency = 0.4
+
+		local padding = panel:FindFirstChildOfClass("UIPadding")
+		if not padding then
+			padding = Instance.new("UIPadding")
+			padding.Parent = panel
+		end
+		padding.PaddingTop = UDim.new(0, 8)
+		padding.PaddingBottom = UDim.new(0, 8)
+		padding.PaddingLeft = UDim.new(0, 10)
+		padding.PaddingRight = UDim.new(0, 10)
+
+		local title = panel:FindFirstChild("SessionBonusTitle")
+		if not (title and title:IsA("TextLabel")) then
+			title = Instance.new("TextLabel")
+			title.Name = "SessionBonusTitle"
+			title.Parent = panel
+		end
+		title.BackgroundTransparency = 1
+		title.Font = Enum.Font.GothamBold
+		title.TextSize = 14
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = Color3.fromRGB(200, 240, 255)
+		title.Text = "SESSION BONUS"
+		title.Size = UDim2.new(1, 0, 0, 18)
+
+		local progressLabel = panel:FindFirstChild("SessionBonusProgressText")
+		if not (progressLabel and progressLabel:IsA("TextLabel")) then
+			progressLabel = Instance.new("TextLabel")
+			progressLabel.Name = "SessionBonusProgressText"
+			progressLabel.Parent = panel
+		end
+		progressLabel.BackgroundTransparency = 1
+		progressLabel.Font = Enum.Font.GothamSemibold
+		progressLabel.TextSize = 16
+		progressLabel.TextXAlignment = Enum.TextXAlignment.Left
+		progressLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		progressLabel.Position = UDim2.new(0, 0, 0, 22)
+		progressLabel.Size = UDim2.new(1, 0, 0, 22)
+
+		local barBackground = panel:FindFirstChild("SessionBonusProgressBar")
+		if not (barBackground and barBackground:IsA("Frame")) then
+			barBackground = Instance.new("Frame")
+			barBackground.Name = "SessionBonusProgressBar"
+			barBackground.Parent = panel
+		end
+		barBackground.BackgroundColor3 = Color3.fromRGB(35, 45, 60)
+		barBackground.BorderSizePixel = 0
+		barBackground.Position = UDim2.new(0, 0, 0, 48)
+		barBackground.Size = UDim2.new(1, 0, 0, 18)
+
+		local barCorner = barBackground:FindFirstChildOfClass("UICorner")
+		if not barCorner then
+			barCorner = Instance.new("UICorner")
+			barCorner.Parent = barBackground
+		end
+		barCorner.CornerRadius = UDim.new(0, 9)
+
+		local fill = barBackground:FindFirstChild("SessionBonusProgressFill")
+		if not (fill and fill:IsA("Frame")) then
+			fill = Instance.new("Frame")
+			fill.Name = "SessionBonusProgressFill"
+			fill.Parent = barBackground
+		end
+		fill.BackgroundColor3 = Color3.fromRGB(110, 225, 255)
+		fill.BorderSizePixel = 0
+		fill.AnchorPoint = Vector2.new(0, 0)
+		fill.Position = UDim2.new(0, 0, 0, 0)
+		fill.Size = UDim2.new(0, 0, 1, 0)
+
+		local fillCorner = fill:FindFirstChildOfClass("UICorner")
+		if not fillCorner then
+			fillCorner = Instance.new("UICorner")
+			fillCorner.Parent = fill
+		end
+		fillCorner.CornerRadius = UDim.new(0, 9)
+
+		sessionBonusPanel = panel
+		sessionBonusProgressFill = fill
+		sessionBonusProgressLabel = progressLabel
+	end
+
+	local function formatSessionTime(seconds)
+		local totalSeconds = math.max(0, math.floor(seconds or 0))
+		local minutes = math.floor(totalSeconds / 60)
+		local secs = totalSeconds % 60
+		return string.format("%02d:%02d", minutes, secs)
+	end
+
+	local function updateSessionBonusUI(elapsedSeconds, targetSeconds)
+		ensureSessionBonusUI()
+		if not (sessionBonusProgressFill and sessionBonusProgressLabel) then
+			return
+		end
+
+		local safeTarget = math.max(targetSeconds, 1)
+		local ratio = math.clamp((elapsedSeconds or 0) / safeTarget, 0, 1)
+		sessionBonusProgressFill.Size = UDim2.new(ratio, 0, 1, 0)
+		sessionBonusProgressLabel.Text = string.format(
+			"%s / %s",
+			formatSessionTime(elapsedSeconds),
+			formatSessionTime(targetSeconds)
+		)
+		sessionBonusTargetSeconds = safeTarget
+	end
+
+	local function handleSessionBonusUpdate(payload)
+		if typeof(payload) ~= "table" then
+			return
+		end
+
+		local elapsed = tonumber(payload.elapsedSeconds) or 0
+		local target = tonumber(payload.targetSeconds) or sessionBonusTargetSeconds
+		updateSessionBonusUI(elapsed, target)
+
+		local activatedRewards = payload.activatedRewards
+		if typeof(activatedRewards) == "table" then
+			for _ in ipairs(activatedRewards) do
+				showToast("Session Bonus Activated!")
+			end
+		end
+	end
+
+	updateSessionBonusUI(0, sessionBonusTargetSeconds)
+
+	local function ensureGlobalStatsUI()
+		if globalStatsPanel and globalStatsPanel.Parent == rightPanel then
+			return
+		end
+		if not rightPanel then
+			return
+		end
+
+		local panel = rightPanel:FindFirstChild("GlobalStatsPanel")
+		if not (panel and panel:IsA("Frame")) then
+			panel = Instance.new("Frame")
+			panel.Name = "GlobalStatsPanel"
+			panel.Parent = rightPanel
+		end
+
+		panel.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
+		panel.BackgroundTransparency = 0.1
+		panel.Size = UDim2.new(1, -10, 0, 110)
+		panel.Position = UDim2.new(0, 5, 0, 0)
+		panel.BorderSizePixel = 0
+		panel.LayoutOrder = -3
+		panel.Visible = true
+
+		local panelCorner = panel:FindFirstChildOfClass("UICorner")
+		if not panelCorner then
+			panelCorner = Instance.new("UICorner")
+			panelCorner.Parent = panel
+		end
+		panelCorner.CornerRadius = UDim.new(0, 8)
+
+		local stroke = panel:FindFirstChildOfClass("UIStroke")
+		if not stroke then
+			stroke = Instance.new("UIStroke")
+			stroke.Parent = panel
+		end
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Color = Color3.fromRGB(70, 90, 110)
+		stroke.Thickness = 1
+		stroke.Transparency = 0.4
+
+		local padding = panel:FindFirstChildOfClass("UIPadding")
+		if not padding then
+			padding = Instance.new("UIPadding")
+			padding.Parent = panel
+		end
+		padding.PaddingTop = UDim.new(0, 8)
+		padding.PaddingBottom = UDim.new(0, 8)
+		padding.PaddingLeft = UDim.new(0, 10)
+		padding.PaddingRight = UDim.new(0, 10)
+
+		local title = panel:FindFirstChild("GlobalStatsTitle")
+		if not (title and title:IsA("TextLabel")) then
+			title = Instance.new("TextLabel")
+			title.Name = "GlobalStatsTitle"
+			title.Parent = panel
+		end
+		title.BackgroundTransparency = 1
+		title.Font = Enum.Font.GothamBold
+		title.TextSize = 14
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = Color3.fromRGB(200, 240, 255)
+		title.Text = "GLOBAL STATS"
+		title.Position = UDim2.new(0, 0, 0, 0)
+		title.Size = UDim2.new(1, 0, 0, 18)
+
+		local dataLabel = panel:FindFirstChild("GlobalStatsDataLabel")
+		if not (dataLabel and dataLabel:IsA("TextLabel")) then
+			dataLabel = Instance.new("TextLabel")
+			dataLabel.Name = "GlobalStatsDataLabel"
+			dataLabel.Parent = panel
+		end
+		dataLabel.BackgroundTransparency = 1
+		dataLabel.Font = Enum.Font.Gotham
+		dataLabel.TextSize = 13
+		dataLabel.TextXAlignment = Enum.TextXAlignment.Left
+		dataLabel.TextColor3 = Color3.fromRGB(210, 210, 210)
+		dataLabel.Text = "Total Data Generated:"
+		dataLabel.Position = UDim2.new(0, 0, 0, 22)
+		dataLabel.Size = UDim2.new(1, 0, 0, 18)
+
+		local dataValue = panel:FindFirstChild("GlobalStatsDataValue")
+		if not (dataValue and dataValue:IsA("TextLabel")) then
+			dataValue = Instance.new("TextLabel")
+			dataValue.Name = "GlobalStatsDataValue"
+			dataValue.Parent = panel
+		end
+		dataValue.BackgroundTransparency = 1
+		dataValue.Font = Enum.Font.GothamSemibold
+		dataValue.TextSize = 18
+		dataValue.TextXAlignment = Enum.TextXAlignment.Left
+		dataValue.TextColor3 = Color3.fromRGB(255, 255, 255)
+		dataValue.Position = UDim2.new(0, 0, 0, 42)
+		dataValue.Size = UDim2.new(1, 0, 0, 22)
+
+		local prestigeLabel = panel:FindFirstChild("GlobalStatsPrestigeLabel")
+		if not (prestigeLabel and prestigeLabel:IsA("TextLabel")) then
+			prestigeLabel = Instance.new("TextLabel")
+			prestigeLabel.Name = "GlobalStatsPrestigeLabel"
+			prestigeLabel.Parent = panel
+		end
+		prestigeLabel.BackgroundTransparency = 1
+		prestigeLabel.Font = Enum.Font.Gotham
+		prestigeLabel.TextSize = 13
+		prestigeLabel.TextXAlignment = Enum.TextXAlignment.Left
+		prestigeLabel.TextColor3 = Color3.fromRGB(210, 210, 210)
+		prestigeLabel.Text = "Total Prestiges:"
+		prestigeLabel.Position = UDim2.new(0, 0, 0, 68)
+		prestigeLabel.Size = UDim2.new(1, 0, 0, 18)
+
+		local prestigeValue = panel:FindFirstChild("GlobalStatsPrestigeValue")
+		if not (prestigeValue and prestigeValue:IsA("TextLabel")) then
+			prestigeValue = Instance.new("TextLabel")
+			prestigeValue.Name = "GlobalStatsPrestigeValue"
+			prestigeValue.Parent = panel
+		end
+		prestigeValue.BackgroundTransparency = 1
+		prestigeValue.Font = Enum.Font.GothamSemibold
+		prestigeValue.TextSize = 18
+		prestigeValue.TextXAlignment = Enum.TextXAlignment.Left
+		prestigeValue.TextColor3 = Color3.fromRGB(255, 255, 255)
+		prestigeValue.Position = UDim2.new(0, 0, 0, 88)
+		prestigeValue.Size = UDim2.new(1, 0, 0, 22)
+
+		globalStatsPanel = panel
+		globalStatsDataValue = dataValue
+		globalStatsPrestigeValue = prestigeValue
+	end
+
+	local function updateGlobalStatsUI(totalData, totalPrestiges)
+		ensureGlobalStatsUI()
+		if globalStatsDataValue then
+			globalStatsDataValue.Text = NumberFormatter.format(totalData or 0)
+		end
+		if globalStatsPrestigeValue then
+			globalStatsPrestigeValue.Text = NumberFormatter.format(totalPrestiges or 0)
+		end
+	end
+
+	local function handleGlobalStatsUpdate(payload)
+		if typeof(payload) ~= "table" then
+			return
+		end
+
+		local totalData = tonumber(payload.totalData) or 0
+		local totalPrestiges = tonumber(payload.totalPrestiges) or 0
+		updateGlobalStatsUI(totalData, totalPrestiges)
+	end
+
+	updateGlobalStatsUI(0, 0)
+
+	local function ensureServerPowerUI()
+		if serverPowerPanel and serverPowerPanel.Parent == rightPanel then
+			return
+		end
+		if not rightPanel then
+			return
+		end
+
+		local panel = rightPanel:FindFirstChild("ServerPowerPanel")
+		if not (panel and panel:IsA("Frame")) then
+			panel = Instance.new("Frame")
+			panel.Name = "ServerPowerPanel"
+			panel.Parent = rightPanel
+		end
+
+		panel.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
+		panel.BackgroundTransparency = 0.1
+		panel.Size = UDim2.new(1, -10, 0, 60)
+		panel.Position = UDim2.new(0, 5, 0, 0)
+		panel.BorderSizePixel = 0
+		panel.LayoutOrder = -1
+		panel.Visible = true
+
+		local panelCorner = panel:FindFirstChildOfClass("UICorner")
+		if not panelCorner then
+			panelCorner = Instance.new("UICorner")
+			panelCorner.Parent = panel
+		end
+		panelCorner.CornerRadius = UDim.new(0, 8)
+
+		local stroke = panel:FindFirstChildOfClass("UIStroke")
+		if not stroke then
+			stroke = Instance.new("UIStroke")
+			stroke.Parent = panel
+		end
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Color = Color3.fromRGB(70, 90, 110)
+		stroke.Thickness = 1
+		stroke.Transparency = 0.4
+
+		local padding = panel:FindFirstChildOfClass("UIPadding")
+		if not padding then
+			padding = Instance.new("UIPadding")
+			padding.Parent = panel
+		end
+		padding.PaddingTop = UDim.new(0, 8)
+		padding.PaddingBottom = UDim.new(0, 8)
+		padding.PaddingLeft = UDim.new(0, 10)
+		padding.PaddingRight = UDim.new(0, 10)
+
+		local title = panel:FindFirstChild("ServerPowerTitle")
+		if not (title and title:IsA("TextLabel")) then
+			title = Instance.new("TextLabel")
+			title.Name = "ServerPowerTitle"
+			title.Parent = panel
+		end
+		title.BackgroundTransparency = 1
+		title.Font = Enum.Font.GothamBold
+		title.TextSize = 14
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = Color3.fromRGB(200, 240, 255)
+		title.Text = "SERVER POWER"
+		title.Size = UDim2.new(1, 0, 0, 18)
+
+		local status = panel:FindFirstChild("ServerPowerStatus")
+		if not (status and status:IsA("TextLabel")) then
+			status = Instance.new("TextLabel")
+			status.Name = "ServerPowerStatus"
+			status.Parent = panel
+		end
+		status.BackgroundTransparency = 1
+		status.Font = Enum.Font.GothamSemibold
+		status.TextSize = 16
+		status.TextXAlignment = Enum.TextXAlignment.Left
+		status.TextColor3 = Color3.fromRGB(255, 255, 255)
+		status.Position = UDim2.new(0, 0, 0, 26)
+		status.Size = UDim2.new(1, 0, 0, 24)
+
+		serverPowerPanel = panel
+		serverPowerLabel = status
+	end
+
+	local function updateServerPowerUI(multiplier, playerCount)
+		ensureServerPowerUI()
+		if not serverPowerLabel then
+			return
+		end
+
+		local percent = math.max((tonumber(multiplier) or 1) - 1, 0) * 100
+		local players = math.max(tonumber(playerCount) or 0, 0)
+		serverPowerLabel.Text = string.format("+%.1f%% (%d Players)", percent, players)
+	end
+
+	local function handleServerPowerUpdate(payload)
+		if typeof(payload) ~= "table" then
+			return
+		end
+
+		updateServerPowerUI(payload.multiplier, payload.playerCount)
+	end
+
+	updateServerPowerUI(0, 0)
+
+	local function handleSystemNotification(message)
+		if typeof(message) ~= "string" then
+			return
+		end
+		showToast(message, Color3.fromRGB(210, 215, 225))
+	end
+
+	local function handleGlobalAnnouncement(payload)
+		if typeof(payload) ~= "table" then
+			return
+		end
+
+		local message = payload.message
+		if typeof(message) ~= "string" then
+			return
+		end
+
+		local color = payload.color
+		if typeof(color) ~= "Color3" then
+			color = Color3.fromRGB(225, 230, 240)
+		end
+
+		showToast(message, color)
+	end
+
 	if storeController then
 		if storeController.RefreshGamepassOwnership then
 			storeController.RefreshGamepassOwnership()
@@ -482,6 +934,261 @@ function LoadingInitializer.Init()
 
 	local prestigeButton = safeFind(prestigeBox, "PrestigeButton")
 	local prestigeOverlay = safeFind(prestigeBox, "PrestigeLockedOverlay")
+	local prestigePreviewPanel
+	local prestigePreviewTitle
+	local prestigePreviewSubtext
+	local prestigePreviewBody
+	local prestigePreviewStroke
+	local previewGlowConnection
+	local lastPreviewPayload
+
+	local function stopPreviewGlowPulse()
+		if previewGlowConnection then
+			previewGlowConnection:Disconnect()
+			previewGlowConnection = nil
+		end
+	end
+
+	local function ensurePreviewStroke(panel)
+		if prestigePreviewStroke and prestigePreviewStroke.Parent == panel then
+			return prestigePreviewStroke
+		end
+
+		local stroke = panel:FindFirstChild("PreviewGlowStroke")
+		if stroke and stroke:IsA("UIStroke") then
+			prestigePreviewStroke = stroke
+			return stroke
+		end
+
+		stroke = Instance.new("UIStroke")
+		stroke.Name = "PreviewGlowStroke"
+		stroke.Thickness = 1
+		stroke.Transparency = 0.7
+		stroke.Color = Color3.fromRGB(80, 88, 100)
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Parent = panel
+		prestigePreviewStroke = stroke
+		return stroke
+	end
+
+	local function startPreviewGlowPulse()
+		if previewGlowConnection or not prestigePreviewStroke then
+			return
+		end
+
+		local pulseTime = 0
+		previewGlowConnection = RunService.RenderStepped:Connect(function(dt)
+			if not prestigePreviewStroke or not prestigePreviewStroke.Parent then
+				stopPreviewGlowPulse()
+				return
+			end
+			pulseTime += dt
+			local normalized = (math.sin(pulseTime * 5) + 1) * 0.5
+			prestigePreviewStroke.Transparency = 0.05 + (normalized * 0.25)
+		end)
+	end
+
+	local function applyPreviewGlow(multiplier)
+		if not prestigePreviewStroke then
+			return
+		end
+
+		local numericMultiplier = typeof(multiplier) == "number" and multiplier or 0
+		if numericMultiplier >= 25 then
+			prestigePreviewStroke.Enabled = true
+			prestigePreviewStroke.Thickness = 3
+			prestigePreviewStroke.Color = Color3.fromRGB(255, 226, 150)
+			prestigePreviewStroke.Transparency = 0.1
+			startPreviewGlowPulse()
+			return
+		end
+
+		stopPreviewGlowPulse()
+
+		if numericMultiplier >= 10 then
+			prestigePreviewStroke.Enabled = true
+			prestigePreviewStroke.Thickness = 3
+			prestigePreviewStroke.Color = Color3.fromRGB(255, 198, 120)
+			prestigePreviewStroke.Transparency = 0.15
+		elseif numericMultiplier >= 5 then
+			prestigePreviewStroke.Enabled = true
+			prestigePreviewStroke.Thickness = 2
+			prestigePreviewStroke.Color = Color3.fromRGB(120, 210, 255)
+			prestigePreviewStroke.Transparency = 0.35
+		else
+			prestigePreviewStroke.Enabled = true
+			prestigePreviewStroke.Thickness = 1
+			prestigePreviewStroke.Color = Color3.fromRGB(80, 88, 100)
+			prestigePreviewStroke.Transparency = 0.7
+		end
+	end
+
+	local function ensurePrestigePreviewPanel()
+		if prestigePreviewPanel and prestigePreviewPanel.Parent == prestigeBox then
+			return
+		end
+
+		if not prestigeBox then
+			return
+		end
+
+		local panel = prestigeBox:FindFirstChild("PrestigePreviewPanel")
+		if not (panel and panel:IsA("Frame")) then
+			panel = Instance.new("Frame")
+			panel.Name = "PrestigePreviewPanel"
+			panel.Parent = prestigeBox
+		end
+
+		panel.BackgroundColor3 = Color3.fromRGB(17, 24, 35)
+		panel.BackgroundTransparency = 0.1
+		panel.BorderSizePixel = 0
+		panel.AutomaticSize = Enum.AutomaticSize.Y
+		panel.Size = UDim2.new(1, -10, 0, 0)
+		panel.Position = UDim2.new(0, 5, 0, 0)
+		panel.LayoutOrder = prestigeButton and ((prestigeButton.LayoutOrder or 0) - 1) or -1
+		panel.ClipsDescendants = true
+		panel.Visible = true
+
+		local padding = panel:FindFirstChildOfClass("UIPadding")
+		if not padding then
+			padding = Instance.new("UIPadding")
+			padding.Name = "PreviewPadding"
+			padding.Parent = panel
+		end
+		padding.PaddingTop = UDim.new(0, 8)
+		padding.PaddingBottom = UDim.new(0, 8)
+		padding.PaddingLeft = UDim.new(0, 10)
+		padding.PaddingRight = UDim.new(0, 10)
+
+		local corner = panel:FindFirstChildOfClass("UICorner")
+		if not corner then
+			corner = Instance.new("UICorner")
+			corner.Name = "PreviewCorner"
+			corner.Parent = panel
+		end
+		corner.CornerRadius = UDim.new(0, 8)
+
+		local layout = panel:FindFirstChild("PreviewLayout")
+		if not (layout and layout:IsA("UIListLayout")) then
+			layout = Instance.new("UIListLayout")
+			layout.Name = "PreviewLayout"
+			layout.Parent = panel
+		end
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.FillDirection = Enum.FillDirection.Vertical
+		layout.VerticalAlignment = Enum.VerticalAlignment.Top
+		layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+		layout.Padding = UDim.new(0, 4)
+
+		local function configureLabel(label, font, size, color)
+			label.BackgroundTransparency = 1
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextWrapped = true
+			label.Font = font
+			label.TextSize = size
+			label.Size = UDim2.new(1, 0, 0, 0)
+			label.AutomaticSize = Enum.AutomaticSize.Y
+			label.TextColor3 = color
+		end
+
+		local title = panel:FindFirstChild("PreviewTitle")
+		if not (title and title:IsA("TextLabel")) then
+			title = Instance.new("TextLabel")
+			title.Name = "PreviewTitle"
+			title.Parent = panel
+		end
+		configureLabel(title, Enum.Font.GothamBold, 14, Color3.fromRGB(190, 255, 255))
+		title.Text = "PRESTIGE PREVIEW"
+		title.LayoutOrder = 1
+
+		local subtext = panel:FindFirstChild("PreviewSubtext")
+		if not (subtext and subtext:IsA("TextLabel")) then
+			subtext = Instance.new("TextLabel")
+			subtext.Name = "PreviewSubtext"
+			subtext.Parent = panel
+		end
+		configureLabel(subtext, Enum.Font.Gotham, 12, Color3.fromRGB(210, 210, 210))
+		subtext.LayoutOrder = 2
+
+		local body = panel:FindFirstChild("PreviewBody")
+		if not (body and body:IsA("TextLabel")) then
+			body = Instance.new("TextLabel")
+			body.Name = "PreviewBody"
+			body.Parent = panel
+		end
+		configureLabel(body, Enum.Font.GothamSemibold, 18, Color3.fromRGB(255, 255, 255))
+		body.LayoutOrder = 3
+
+		panel:GetPropertyChangedSignal("Parent"):Connect(function()
+			if not panel.Parent then
+				stopPreviewGlowPulse()
+			end
+		end)
+
+		prestigePreviewPanel = panel
+		prestigePreviewTitle = title
+		prestigePreviewSubtext = subtext
+		prestigePreviewBody = body
+		prestigePreviewStroke = ensurePreviewStroke(panel)
+	end
+
+	ensurePrestigePreviewPanel()
+
+	local function setPreviewPending()
+		if prestigePreviewSubtext then
+			prestigePreviewSubtext.Text = "Calculating preview..."
+		end
+		if prestigePreviewBody then
+			prestigePreviewBody.Text = "..."
+		end
+		applyPreviewGlow(0)
+	end
+
+	local function formatMultiplier(value)
+		local numericValue = typeof(value) == "number" and value or 0
+		return string.format("%.2f", math.max(numericValue, 0))
+	end
+
+	local function updatePreviewText(payload)
+		if not prestigePreviewPanel then
+			return
+		end
+
+		if typeof(payload) ~= "table" then
+			setPreviewPending()
+			return
+		end
+
+		local canPrestige = payload.canPrestige == true
+		local nextMultiplier = typeof(payload.nextMultiplier) == "number" and payload.nextMultiplier or 0
+		local multiplierGain = typeof(payload.multiplierGain) == "number" and payload.multiplierGain or 0
+
+		if prestigePreviewSubtext then
+			if canPrestige then
+				prestigePreviewSubtext.Text = "If you prestiged now:"
+			else
+				local requirement = NumberFormatter.format(payload.unlockRequirement or 0)
+				prestigePreviewSubtext.Text = string.format("Unlocks at %s Data", requirement)
+			end
+		end
+
+		if prestigePreviewBody then
+			if canPrestige then
+				local gainText = multiplierGain
+				if gainText <= 0 then
+					gainText = nextMultiplier - 1
+				end
+				prestigePreviewBody.Text = string.format("+%sx Permanent Power", formatMultiplier(gainText))
+			else
+				local current = NumberFormatter.format(payload.currentData or 0)
+				prestigePreviewBody.Text = string.format("Currently: %s Data", current)
+			end
+		end
+
+		applyPreviewGlow(canPrestige and nextMultiplier or 0)
+	end
+
+	setPreviewPending()
 
 	local template = playerGui:FindFirstChild("UpgradeCardTemplate")
 	if not template then
@@ -501,9 +1208,29 @@ function LoadingInitializer.Init()
 	local requestSync = safeFind(remotesFolder, "RequestSync")
 	local buyUpgradeEvent = safeFind(remotesFolder, "RequestBuyUpgrade")
 	local prestigeEvent = safeFind(remotesFolder, "RequestPrestige")
-	if not (requestSync and buyUpgradeEvent and prestigeEvent) then
-		warn("[TerminalClient] Required remotes missing")
-		return
+	local prestigePreviewEvent = safeFind(remotesFolder, "PrestigePreviewUpdate")
+	local requestPrestigePreview = safeFind(remotesFolder, "RequestPrestigePreview")
+	local sessionBonusEvent = safeFind(remotesFolder, "SessionBonusUpdate")
+	local globalAnnouncementEvent = safeFind(remotesFolder, "GlobalAnnouncement")
+	local globalStatsEvent = safeFind(remotesFolder, "GlobalStatsUpdate")
+	local serverPowerEvent = safeFind(remotesFolder, "ServerPowerUpdate")
+	local systemNotificationEvent = safeFind(remotesFolder, "SystemNotification")
+	if
+		not (
+			requestSync
+			and buyUpgradeEvent
+			and prestigeEvent
+			and prestigePreviewEvent
+				and requestPrestigePreview
+				and sessionBonusEvent
+				and globalAnnouncementEvent
+				and globalStatsEvent
+				and serverPowerEvent
+				and systemNotificationEvent
+			)
+		then
+			warn("[TerminalClient] Required remotes missing")
+			return
 	end
 
 	local UpgradeConfig = require(sharedFolder:WaitForChild("UpgradeConfig"))
@@ -620,6 +1347,55 @@ function LoadingInitializer.Init()
 		if prestigeOverlay then
 			prestigeOverlay.Visible = not canPrestige
 		end
+
+		if lastPreviewPayload then
+			applyPreviewGlow(lastPreviewPayload.canPrestige and lastPreviewPayload.nextMultiplier or 0)
+		end
+	end
+
+	local function handlePrestigePreview(payload)
+		if typeof(payload) ~= "table" then
+			return
+		end
+		lastPreviewPayload = payload
+		updatePreviewText(payload)
+	end
+
+	local function requestInitialPrestigePreview()
+		if not requestPrestigePreview then
+			return
+		end
+
+		task.spawn(function()
+			local ok, payload = pcall(function()
+				return requestPrestigePreview:InvokeServer()
+			end)
+			if ok and typeof(payload) == "table" then
+				handlePrestigePreview(payload)
+			end
+		end)
+	end
+
+	if prestigePreviewEvent then
+		prestigePreviewEvent.OnClientEvent:Connect(handlePrestigePreview)
+	end
+	requestInitialPrestigePreview()
+	if sessionBonusEvent then
+		sessionBonusEvent.OnClientEvent:Connect(handleSessionBonusUpdate)
+	end
+	if globalAnnouncementEvent then
+		globalAnnouncementEvent.OnClientEvent:Connect(handleGlobalAnnouncement)
+	end
+	if globalStatsEvent then
+		globalStatsEvent.OnClientEvent:Connect(handleGlobalStatsUpdate)
+		updateGlobalStatsUI(0, 0)
+	end
+	if serverPowerEvent then
+		serverPowerEvent.OnClientEvent:Connect(handleServerPowerUpdate)
+		updateServerPowerUI(1, #Players:GetPlayers())
+	end
+	if systemNotificationEvent then
+		systemNotificationEvent.OnClientEvent:Connect(handleSystemNotification)
 	end
 
 	local function applyGlow(card, active)

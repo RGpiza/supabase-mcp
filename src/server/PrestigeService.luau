@@ -9,6 +9,9 @@ local PrestigeService = {}
 local REQUIRED_TIER = 3
 local PRESTIGE_UNIT = 0.1
 local PRESTIGE_MULTIPLIER = 1.15
+local PRESTIGE_UNLOCK_UPGRADE_ID = "sto_3"
+
+local prestigeRequirementCache
 
 local function getPlayerState(player)
 	local state = PlayerDataService.Get(player)
@@ -22,6 +25,32 @@ local function getPlayerState(player)
 	end
 
 	return state
+end
+
+local function getPrestigeRequirementCost()
+	if prestigeRequirementCache then
+		return prestigeRequirementCache
+	end
+
+	local cost = UpgradeConfig.GetCost(PRESTIGE_UNLOCK_UPGRADE_ID, 0)
+	if typeof(cost) ~= "number" then
+		cost = 0
+	end
+
+	prestigeRequirementCache = math.max(cost, 0)
+	return prestigeRequirementCache
+end
+
+local function computeCurrentMultiplier(state)
+	local bonusUnits = typeof(state.corePower) == "number" and math.max(state.corePower, 0) or 0
+	return 1 + (bonusUnits * PRESTIGE_UNIT)
+end
+
+local function computePrestigePreview(state)
+	local currentMultiplier = computeCurrentMultiplier(state)
+	local newMultiplier = currentMultiplier * PRESTIGE_MULTIPLIER
+
+	return currentMultiplier, newMultiplier, math.max(newMultiplier - currentMultiplier, 0)
 end
 
 function PrestigeService.CanPrestige(player)
@@ -45,8 +74,7 @@ function PrestigeService.Prestige(player)
 	end
 
 	local currentBonusUnits = typeof(state.corePower) == "number" and state.corePower or 0
-	local currentMultiplier = 1 + (currentBonusUnits * PRESTIGE_UNIT)
-	local newMultiplier = currentMultiplier * PRESTIGE_MULTIPLIER
+	local currentMultiplier, newMultiplier = computePrestigePreview(state)
 	local newBonusUnits = math.max(((newMultiplier - 1) / PRESTIGE_UNIT), 0)
 
 	local prestigeLevel = (state.prestige or 0) + 1
@@ -88,6 +116,32 @@ function PrestigeService.Prestige(player)
 	end
 
 	return true
+end
+
+function PrestigeService.GetPrestigeRequirement()
+	return getPrestigeRequirementCost()
+end
+
+function PrestigeService.GetPreview(player)
+	local state = getPlayerState(player)
+	if not state then
+		return nil
+	end
+
+	local currentData = typeof(state.data) == "number" and math.max(state.data, 0) or 0
+	local storageTier = UpgradeConfig.GetStorageTier(state.upgrades or {})
+	local canPrestige = storageTier >= REQUIRED_TIER
+	local currentMultiplier, newMultiplier, gain = computePrestigePreview(state)
+
+	return {
+		canPrestige = canPrestige,
+		currentData = currentData,
+		unlockRequirement = getPrestigeRequirementCost(),
+		currentMultiplier = currentMultiplier,
+		nextMultiplier = newMultiplier,
+		multiplierGain = gain,
+		storageTier = storageTier,
+	}
 end
 
 return PrestigeService

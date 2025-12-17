@@ -33,15 +33,25 @@ end
 local requestSync = ensureRemote("RemoteFunction", "RequestSync")
 local buyUpgradeEvent = ensureRemote("RemoteEvent", "RequestBuyUpgrade")
 local prestigeEvent = ensureRemote("RemoteEvent", "RequestPrestige")
+local requestPrestigePreview = ensureRemote("RemoteFunction", "RequestPrestigePreview")
 local saveStatusEvent = ensureRemote("RemoteEvent", "SaveStatus")
 local storeAnalyticsEvent = ensureRemote("RemoteEvent", "StoreAnalyticsEvent")
 local offlinePreviewEvent = ensureRemote("RemoteEvent", "OfflineEarningsPreview")
 local loadingProgressEvent = ensureRemote("RemoteEvent", "LoadingProgress")
+local prestigePreviewEvent = ensureRemote("RemoteEvent", "PrestigePreviewUpdate")
+local sessionBonusEvent = ensureRemote("RemoteEvent", "SessionBonusUpdate")
+local globalAnnouncementEvent = ensureRemote("RemoteEvent", "GlobalAnnouncement")
+local globalStatsEvent = ensureRemote("RemoteEvent", "GlobalStatsUpdate")
+local serverPowerEvent = ensureRemote("RemoteEvent", "ServerPowerUpdate")
+local systemNotificationEvent = ensureRemote("RemoteEvent", "SystemNotification")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionService = require(script.Parent.ProductionService)
 local UpgradeService = require(script.Parent.UpgradeService)
 local PrestigeService = require(script.Parent.PrestigeService)
+local SessionRewardService = require(script.Parent.SessionRewardService)
+local GlobalAnnouncementService = require(script.Parent.GlobalAnnouncementService)
+local GlobalStatsService = require(script.Parent.GlobalStatsService)
 local EconomyAnalytics = require(script.Parent.EconomyAnalytics)
 local OfflineProgress = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("OfflineProgress"))
 local AnalyticsLogger = require(script.Parent.AnalyticsLogger)
@@ -54,8 +64,66 @@ local storeStateByPlayer = {}
 local storePlatformByPlayer = {}
 local offlinePreviewSent = {}
 local sessionInfo = {}
+local prestigePreviewState = {}
+local sessionBonusLoopStarted = false
+local globalStatsLoopStarted = false
+local GLOBAL_STATS_BROADCAST_INTERVAL = 45
+local SERVER_POWER_PER_PLAYER = 0.005
+local SERVER_POWER_CAP = 0.05
 
 local AUTOSAVE_INTERVAL = 60
+
+local function shallowCopy(source)
+	if typeof(source) ~= "table" then
+		return nil
+	end
+
+	local copy = {}
+	for key, value in source do
+		copy[key] = value
+	end
+	return copy
+end
+
+local function previewPayloadChanged(previous, nextPayload)
+	if not previous then
+		return true
+	end
+
+	for _, key in ipairs({
+		"currentData",
+		"nextMultiplier",
+		"multiplierGain",
+		"canPrestige",
+		"unlockRequirement",
+		"storageTier",
+	}) do
+		if previous[key] ~= nextPayload[key] then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function sendPrestigePreview(player, force)
+	if not prestigePreviewEvent then
+		return
+	end
+
+	local payload = PrestigeService.GetPreview(player)
+	if typeof(payload) ~= "table" then
+		return
+	end
+
+	local previous = prestigePreviewState[player]
+	if not force and not previewPayloadChanged(previous, payload) then
+		return
+	end
+
+	prestigePreviewState[player] = shallowCopy(payload)
+	prestigePreviewEvent:FireClient(player, payload)
+end
 
 local function savePlayerWithStatus(player)
 	if not player then
@@ -106,6 +174,13 @@ end
 local function stopAutosave(player)
 	autosaveFlags[player] = nil
 end
+
+PlayerDataService.OnAfterSet(function(player)
+	if not player then
+		return
+	end
+	sendPrestigePreview(player)
+end)
 
 local function applyOfflineProgress(player, playerData)
 	if typeof(playerData) ~= "table" then
@@ -211,6 +286,11 @@ local function addPlayer(player)
 
 	activePlayers[player] = true
 	startAutosave(player)
+	sendPrestigePreview(player, true)
+	sendSessionBonusUpdate(player)
+	sendGlobalStats(player)
+	sendServerPowerUpdate()
+	sendSystemNotification("➕ Player joined the system")
 
 	fireLoadingProgress(player, "Finalizing", 1)
 end
@@ -224,6 +304,9 @@ local function removePlayer(player)
 	storePlatformByPlayer[player] = nil
 	offlinePreviewSent[player] = nil
 	sessionInfo[player] = nil
+	prestigePreviewState[player] = nil
+	sendServerPowerUpdate()
+	sendSystemNotification("➖ Player disconnected")
 end
 
 local validStoreEventTypes = {
@@ -295,6 +378,12 @@ local function applyProduction(player, deltaTime)
 	end
 
 	local dps = ProductionService.GetDataPerSecond(player)
+	local dataMultiplier = SessionRewardService.GetDataMultiplier(player)
+	if typeof(dataMultiplier) == "number" and dataMultiplier > 0 then
+		dps *= dataMultiplier
+	end
+	local serverPowerMultiplier = getServerPowerMultiplier()
+	dps *= serverPowerMultiplier
 	if typeof(dps) ~= "number" or dps <= 0 then
 		return nil, nil
 	end
@@ -305,6 +394,83 @@ local function applyProduction(player, deltaTime)
 	PlayerDataService.Set(player, playerData)
 
 	return dps, added
+end
+
+local function sendSessionBonusUpdate(player)
+	if not sessionBonusEvent then
+		return
+	end
+
+	local progress = SessionRewardService.GetProgress(player)
+	if not progress then
+		return
+	end
+
+	local payload = {
+		elapsedSeconds = progress.elapsedSeconds,
+		targetSeconds = progress.targetSeconds,
+		activeRewards = progress.activeRewards,
+	}
+
+	local activations = SessionRewardService.PopPendingActivations(player)
+	if activations and #activations > 0 then
+		payload.activatedRewards = activations
+	end
+
+	sessionBonusEvent:FireClient(player, payload)
+end
+
+local function getActivePlayerCount()
+	local count = 0
+	for player in pairs(activePlayers) do
+		if player then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function getServerPowerMultiplier(count)
+	local playerCount = count or getActivePlayerCount()
+	local bonus = math.min(playerCount * SERVER_POWER_PER_PLAYER, SERVER_POWER_CAP)
+	return 1 + bonus, playerCount
+end
+
+local function sendServerPowerUpdate()
+	if not serverPowerEvent then
+		return
+	end
+
+	local multiplier, playerCount = getServerPowerMultiplier()
+	serverPowerEvent:FireAllClients({
+		multiplier = multiplier,
+		playerCount = playerCount,
+	})
+end
+
+local function sendSystemNotification(message)
+	if not systemNotificationEvent or typeof(message) ~= "string" then
+		return
+	end
+	systemNotificationEvent:FireAllClients(message)
+end
+
+local function sendGlobalStats(player)
+	if not globalStatsEvent then
+		return
+	end
+
+	local stats = GlobalStatsService.GetStats()
+	local payload = {
+		totalData = stats.totalDataGenerated or 0,
+		totalPrestiges = stats.totalPrestiges or 0,
+	}
+
+	if player then
+		globalStatsEvent:FireClient(player, payload)
+	else
+		globalStatsEvent:FireAllClients(payload)
+	end
 end
 
 local function startProductionLoop()
@@ -324,6 +490,40 @@ local function startProductionLoop()
 			else
 				activePlayers[player] = nil
 			end
+		end
+	end)
+end
+
+local function startSessionBonusLoop()
+	if sessionBonusLoopStarted then
+		return
+	end
+	sessionBonusLoopStarted = true
+
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			for player in pairs(activePlayers) do
+				if player and player.Parent then
+					sendSessionBonusUpdate(player)
+				else
+					activePlayers[player] = nil
+				end
+			end
+		end
+	end)
+end
+
+local function startGlobalStatsLoop()
+	if globalStatsLoopStarted then
+		return
+	end
+	globalStatsLoopStarted = true
+
+	task.spawn(function()
+		while true do
+			task.wait(GLOBAL_STATS_BROADCAST_INTERVAL)
+			sendGlobalStats()
 		end
 	end)
 end
@@ -357,6 +557,10 @@ prestigeEvent.OnServerEvent:Connect(function(player)
 	PrestigeService.Prestige(player)
 end)
 
+requestPrestigePreview.OnServerInvoke = function(player)
+	return PrestigeService.GetPreview(player)
+end
+
 local function onPlayerRemoving(player)
 	local info = sessionInfo[player]
 	if info and info.lastOfflineEarnings then
@@ -386,10 +590,14 @@ for _, player in Players:GetPlayers() do
 end
 
 startProductionLoop()
+startSessionBonusLoop()
+startGlobalStatsLoop()
+GlobalAnnouncementService.Init(globalAnnouncementEvent)
 
 game:BindToClose(function()
 	for _, player in Players:GetPlayers() do
 		savePlayerWithStatus(player)
 		PlayerDataService.Release(player)
 	end
+	GlobalStatsService.Save()
 end)
