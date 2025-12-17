@@ -37,6 +37,8 @@ local saveStatusEvent = ensureRemote("RemoteEvent", "SaveStatus")
 local storeAnalyticsEvent = ensureRemote("RemoteEvent", "StoreAnalyticsEvent")
 local offlinePreviewEvent = ensureRemote("RemoteEvent", "OfflineEarningsPreview")
 local loadingProgressEvent = ensureRemote("RemoteEvent", "LoadingProgress")
+local toggleAutoBuyEvent = ensureRemote("RemoteEvent", "ToggleAutoBuy")
+local autoBuyFeedbackEvent = ensureRemote("RemoteEvent", "AutoBuyFeedback")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionService = require(script.Parent.ProductionService)
@@ -45,6 +47,9 @@ local PrestigeService = require(script.Parent.PrestigeService)
 local EconomyAnalytics = require(script.Parent.EconomyAnalytics)
 local OfflineProgress = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("OfflineProgress"))
 local AnalyticsLogger = require(script.Parent.AnalyticsLogger)
+local AutomationService = require(script.Parent.AutomationService)
+
+AutomationService.Init(autoBuyFeedbackEvent)
 
 local activePlayers = {}
 local productionLoopStarted = false
@@ -194,10 +199,36 @@ local function fireLoadingProgress(player, message, progress)
 	loadingProgressEvent:FireClient(player, message, progress)
 end
 
+local function initPlayerData(player)
+	local initMethod = PlayerDataService and PlayerDataService.InitPlayer
+
+	if typeof(initMethod) ~= "function" and PlayerDataService then
+		-- Backwards compatibility with older PlayerDataService exports.
+		initMethod = PlayerDataService.Init or PlayerDataService.Get
+	end
+
+	if typeof(initMethod) ~= "function" then
+		warn("[GameServer] PlayerDataService is missing an initializer; using empty data for", player)
+		return {}
+	end
+
+	local ok, playerData = pcall(initMethod, player)
+	if not ok then
+		warn("[GameServer] PlayerDataService failed to load data for", player, playerData)
+		return {}
+	end
+
+	if typeof(playerData) ~= "table" then
+		return {}
+	end
+
+	return playerData
+end
+
 local function addPlayer(player)
 	fireLoadingProgress(player, "Loading data", 0.25)
 
-	local playerData = PlayerDataService.InitPlayer(player)
+	local playerData = initPlayerData(player)
 	player:SetAttribute("StorePlatform", player:GetAttribute("StorePlatform") or "Unknown")
 	sessionInfo[player] = {
 		joinTime = os.time(),
@@ -328,6 +359,14 @@ local function startProductionLoop()
 	end)
 end
 
+toggleAutoBuyEvent.OnServerEvent:Connect(function(player, branchName, enabled)
+	if not player then
+		return
+	end
+
+	AutomationService.SetEnabled(player, branchName, enabled)
+end)
+
 requestSync.OnServerInvoke = function(player)
 	local data = PlayerDataService.Get(player)
 	if typeof(data) ~= "table" then
@@ -341,12 +380,30 @@ requestSync.OnServerInvoke = function(player)
 	return state
 end
 
-buyUpgradeEvent.OnServerEvent:Connect(function(player, upgradeId)
+buyUpgradeEvent.OnServerEvent:Connect(function(player, payload)
 	if not player then
 		return
 	end
 
-	UpgradeService.Buy(player, upgradeId)
+	local upgradeId = payload
+	local mode = "single"
+
+	if typeof(payload) == "table" then
+		upgradeId = payload.upgradeId
+		if payload.mode == "max" then
+			mode = "max"
+		end
+	end
+
+	if typeof(upgradeId) ~= "string" then
+		return
+	end
+
+	if mode == "max" then
+		UpgradeService.BuyMax(player, upgradeId)
+	else
+		UpgradeService.Buy(player, upgradeId)
+	end
 end)
 
 prestigeEvent.OnServerEvent:Connect(function(player)

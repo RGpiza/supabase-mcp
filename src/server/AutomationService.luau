@@ -1,75 +1,73 @@
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local UpgradeService = require(script.Parent.UpgradeService)
-local UpgradeConfig = require(game:GetService("ReplicatedStorage").Shared.UpgradeConfig)
-local AutomationConfig = require(game:GetService("ReplicatedStorage").Shared.AutomationConfig)
+local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
+local AutomationConfig = require(ReplicatedStorage.Shared.AutomationConfig)
 
 local AutomationService = {}
 
-local CHECK_INTERVAL = 2
+local PROCESS_INTERVAL = 0.35
+local MAX_BRANCH_ITERATIONS = 4
+
 local automationSettings = {}
-local automationById = {}
-local automationOrder = {}
-local branchByAutomation = {
-	auto_cpu = "CPU",
-	auto_ram = "RAM",
-}
+local feedbackRemote
 
-for _, definition in ipairs(AutomationConfig.GetAll()) do
-	automationById[definition.id] = definition
-	table.insert(automationOrder, definition.id)
+local definitions = AutomationConfig.GetAll()
+local definitionsByBranch = {}
+local branchUpgradeMap = {}
+
+for _, definition in ipairs(definitions) do
+	if definition.branch then
+		definitionsByBranch[definition.branch] = definition
+		branchUpgradeMap[definition.branch] = UpgradeConfig.GetUpgradesByBranch(definition.branch)
+	end
 end
 
-local function getPlayerSettings(player)
-	local settings = automationSettings[player]
-	if not settings then
-		settings = {}
-		automationSettings[player] = settings
-	end
-	return settings
-end
-
-local function isAutomationEnabled(player, automation)
-	local settings = getPlayerSettings(player)
-	local value = settings[automation.id]
-	if value == nil then
-		return automation.enabledByDefault
-	end
-	return value
-end
-
-local function isAutomationUnlocked(playerData, automation)
-	local requirements = automation.unlockRequirement
-	if not requirements then
-		return true
+local function ensurePlayerDefaults(player)
+	local state = automationSettings[player]
+	if not state then
+		state = {}
+		automationSettings[player] = state
 	end
 
-	if requirements.storageTier then
-		local tier = UpgradeConfig.GetStorageTier(playerData.upgrades or {})
-		if tier < requirements.storageTier then
-			return false
+	for branch, definition in pairs(definitionsByBranch) do
+		if state[branch] == nil then
+			state[branch] = definition.enabledByDefault == true
+		end
+
+		if definition.attribute and player:GetAttribute(definition.attribute) == nil then
+			player:SetAttribute(definition.attribute, state[branch])
 		end
 	end
 
-	return true
+	if player:GetAttribute("PrestigeInProgress") == nil then
+		player:SetAttribute("PrestigeInProgress", false)
+	end
+
+	return state
 end
 
-local function selectCheapestUpgrade(branch, playerData)
-	local definitions = UpgradeConfig.GetUpgradesByBranch(branch)
-	local owned = playerData.upgrades or {}
+local function selectAffordableUpgrade(branch, playerData)
+	local upgrades = branchUpgradeMap[branch]
+	if not upgrades then
+		return nil
+	end
+
+	local owned = typeof(playerData.upgrades) == "table" and playerData.upgrades or {}
 	local currency = typeof(playerData.data) == "number" and playerData.data or 0
 
 	local choiceId
-	local choiceCost
+	local lowestCost
 
-	for _, upgrade in ipairs(definitions) do
+	for _, upgrade in ipairs(upgrades) do
 		if not UpgradeConfig.IsMaxed(owned, upgrade.id) and UpgradeConfig.MeetsRequirements(owned, upgrade.id) then
 			local level = UpgradeConfig.GetLevel(owned, upgrade.id)
 			local cost = UpgradeConfig.GetCost(upgrade.id, level)
 			if typeof(cost) == "number" and currency >= cost then
-				if not choiceCost or cost < choiceCost then
-					choiceCost = cost
+				if not lowestCost or cost < lowestCost then
+					lowestCost = cost
 					choiceId = upgrade.id
 				end
 			end
@@ -79,76 +77,141 @@ local function selectCheapestUpgrade(branch, playerData)
 	return choiceId
 end
 
-local function tryAutomationPurchase(player, automationId, playerData)
-	local automation = automationById[automationId]
-	if not automation or not isAutomationEnabled(player, automation) then
+local function sendFeedback(player, branch, amount)
+	if feedbackRemote and player and player.Parent then
+		feedbackRemote:FireClient(player, branch, amount)
+	end
+end
+
+function AutomationService.SetEnabled(player, branchName, enabled)
+	if not player or typeof(branchName) ~= "string" then
+		return
+	end
+
+	local normalizedBranch = string.upper(branchName)
+	local definition = definitionsByBranch[normalizedBranch]
+	if not definition then
+		return
+	end
+
+	local state = ensurePlayerDefaults(player)
+	state[normalizedBranch] = enabled == true
+
+	if definition.attribute then
+		player:SetAttribute(definition.attribute, state[normalizedBranch])
+	end
+end
+
+function AutomationService._processBranch(player, branchName, playerData)
+	local definition = definitionsByBranch[branchName]
+	if not definition then
 		return playerData
 	end
 
-	if not isAutomationUnlocked(playerData, automation) then
-		return playerData
+	if definition.unlockRequirement and definition.unlockRequirement.storageTier and definition.unlockRequirement.storageTier > 0 then
+		local tier = UpgradeConfig.GetStorageTier(playerData.upgrades or {})
+		if tier < definition.unlockRequirement.storageTier then
+			return playerData
+		end
 	end
 
-	local branch = branchByAutomation[automationId]
-	if not branch then
-		return playerData
+	local totalPurchased = 0
+	local iterations = 0
+
+	while iterations < MAX_BRANCH_ITERATIONS do
+		iterations += 1
+
+		if player:GetAttribute("PrestigeInProgress") then
+			break
+		end
+
+		local upgradeId = selectAffordableUpgrade(branchName, playerData)
+		if not upgradeId then
+			break
+		end
+
+		local success, purchased = UpgradeService.BuyMax(player, upgradeId)
+		if not success or not purchased or purchased <= 0 then
+			break
+		end
+
+		totalPurchased += purchased
+
+		playerData = PlayerDataService.Get(player)
+		if typeof(playerData) ~= "table" then
+			break
+		end
 	end
 
-	local upgradeId = selectCheapestUpgrade(branch, playerData)
-	if not upgradeId then
-		return playerData
-	end
-
-	local success = UpgradeService.Buy(player, upgradeId)
-	if success then
-		return PlayerDataService.Get(player)
+	if totalPurchased > 0 then
+		sendFeedback(player, branchName, totalPurchased)
 	end
 
 	return playerData
 end
 
-local function processPlayerAutomation(player)
+function AutomationService._processPlayer(player, state)
+	if not player or not state then
+		return
+	end
+
+	if player:GetAttribute("PrestigeInProgress") then
+		return
+	end
+
+	local anyEnabled = false
+	for branch, enabled in pairs(state) do
+		if enabled == true and definitionsByBranch[branch] then
+			anyEnabled = true
+			break
+		end
+	end
+
+	if not anyEnabled then
+		return
+	end
+
 	local playerData = PlayerDataService.Get(player)
 	if typeof(playerData) ~= "table" then
 		return
 	end
 
-	for _, automationId in ipairs(automationOrder) do
-		playerData = tryAutomationPurchase(player, automationId, playerData)
-	end
-end
-
-local function automationLoop()
-	while true do
-		task.wait(CHECK_INTERVAL)
-		for player in pairs(automationSettings) do
-			if player and player.Parent then
-				processPlayerAutomation(player)
-			else
-				automationSettings[player] = nil
+	for branch, enabled in pairs(state) do
+		if enabled == true and definitionsByBranch[branch] then
+			playerData = AutomationService._processBranch(player, branch, playerData)
+			if typeof(playerData) ~= "table" then
+				playerData = PlayerDataService.Get(player)
+				if typeof(playerData) ~= "table" then
+					break
+				end
 			end
 		end
 	end
 end
 
-function AutomationService.SetEnabled(player, automationId, enabled)
-	local automation = automationById[automationId]
-	if not automation then
-		return
+local function processPlayers()
+	for player, state in pairs(automationSettings) do
+		if player and player.Parent then
+			AutomationService._processPlayer(player, state)
+		else
+			automationSettings[player] = nil
+		end
 	end
-
-	local settings = getPlayerSettings(player)
-	settings[automationId] = enabled and true or false
 end
 
-function AutomationService.Init()
+function AutomationService.Init(remote)
 	if AutomationService._initialized then
+		if remote then
+			feedbackRemote = remote
+		end
 		return
 	end
+
 	AutomationService._initialized = true
+	feedbackRemote = remote
 
 	Players.PlayerAdded:Connect(function(player)
-		getPlayerSettings(player)
+		ensurePlayerDefaults(player)
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)
@@ -156,10 +219,15 @@ function AutomationService.Init()
 	end)
 
 	for _, player in ipairs(Players:GetPlayers()) do
-		getPlayerSettings(player)
+		ensurePlayerDefaults(player)
 	end
 
-	task.spawn(automationLoop)
+	task.spawn(function()
+		while true do
+			task.wait(PROCESS_INTERVAL)
+			processPlayers()
+		end
+	end)
 end
 
 return AutomationService

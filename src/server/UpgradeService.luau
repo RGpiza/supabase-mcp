@@ -59,6 +59,62 @@ local function evaluatePurchase(state, upgradeId)
 	return true, cost, currentLevel, nil
 end
 
+local function planPurchase(state, upgradeId, desiredQuantity)
+	local success, _, currentLevel, reason = evaluatePurchase(state, upgradeId)
+	if not success then
+		return 0, state.data or 0, currentLevel, reason
+	end
+
+	local definition = getUpgradeDefinition(upgradeId)
+	if not definition then
+		return 0, state.data or 0, currentLevel, "locked"
+	end
+
+	local remainingData = state.data or 0
+	local purchases = 0
+	local maxLevel = definition.maxLevel
+
+	while currentLevel < maxLevel do
+		if desiredQuantity and purchases >= desiredQuantity then
+			break
+		end
+
+		local cost = UpgradeConfig.GetCost(upgradeId, currentLevel)
+		if typeof(cost) ~= "number" or remainingData < cost then
+			break
+		end
+
+		remainingData -= cost
+		currentLevel += 1
+		purchases += 1
+	end
+
+	if purchases <= 0 then
+		return 0, state.data or 0, currentLevel, "poor"
+	end
+
+	return purchases, remainingData, currentLevel, nil
+end
+
+local function executePurchase(player, upgradeId, desiredQuantity)
+	local state = ensurePlayerState(player)
+	if not state then
+		return false, "locked", 0
+	end
+
+	local quantity, remainingData, resultingLevel, reason = planPurchase(state, upgradeId, desiredQuantity)
+	if quantity <= 0 then
+		return false, reason or "locked", 0
+	end
+
+	state.data = remainingData
+	state.upgrades[upgradeId] = resultingLevel
+
+	PlayerDataService.Set(player, state)
+
+	return true, quantity
+end
+
 function UpgradeService.CanBuy(player, upgradeId)
 	local state = ensurePlayerState(player)
 	if not state then
@@ -70,22 +126,17 @@ function UpgradeService.CanBuy(player, upgradeId)
 end
 
 function UpgradeService.Buy(player, upgradeId)
-	local state = ensurePlayerState(player)
-	if not state then
-		return false, "locked"
-	end
-
-	local success, cost, currentLevel, reason = evaluatePurchase(state, upgradeId)
+	local success, reasonOrQuantity = executePurchase(player, upgradeId, 1)
 	if not success then
-		return false, reason
+		return false, reasonOrQuantity
 	end
 
-	state.data = (state.data or 0) - cost
-	state.upgrades[upgradeId] = currentLevel + 1
+	return true, reasonOrQuantity
+end
 
-	PlayerDataService.Set(player, state)
-
-	return true
+function UpgradeService.BuyMax(player, upgradeId)
+	local success, purchased = executePurchase(player, upgradeId, nil)
+	return success, purchased
 end
 
 return UpgradeService

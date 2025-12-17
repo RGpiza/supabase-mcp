@@ -20,6 +20,10 @@ function LoadingInitializer.Init()
 		return
 	end
 
+	if player.GetAttribute and player.SetAttribute then
+		player:SetAttribute("PrestigeInProgress", false)
+	end
+
 	local clientReadyFlag = false
 	local readyCallbacks = {}
 
@@ -49,6 +53,21 @@ function LoadingInitializer.Init()
 	local WAIT_TIMEOUT = 5
 	local LOADING_UI_DISPLAY_ORDER = 999999
 	local READY_TIMEOUT = 15
+	local LONG_PRESS_THRESHOLD = 0.4
+	local MIN_BUTTON_HEIGHT = 44
+	local PENDING_MAX_TIMEOUT = 2
+	local BUY_MODE_SINGLE = "single"
+	local BUY_MODE_MAX = "max"
+	local isTouchOnlyDevice = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+	local AUTO_TOGGLE_MIN_HEIGHT = 44
+	local AUTO_TOGGLE_ON_COLOR = Color3.fromRGB(75, 255, 190)
+	local AUTO_TOGGLE_OFF_COLOR = Color3.fromRGB(45, 55, 65)
+	local AUTO_TOGGLE_TEXT_COLOR = Color3.fromRGB(10, 15, 20)
+	local AUTO_TOGGLE_PENDING_TIMEOUT = 1.5
+	local AUTO_BUY_TOAST_THRESHOLD = 10
+	local AUTO_PULSE_COLOR = Color3.fromRGB(85, 255, 205)
+	local AUTO_PULSE_FADE_TIME = 0.25
+	local PRESTIGE_FAILSAFE_DELAY = 4
 
 	local function waitForChildWithTimeout(parent, childName)
 		if not parent then
@@ -449,12 +468,35 @@ function LoadingInitializer.Init()
 	local topBar = ui.topBar
 	local main = ui.main
 	local columns = ui.columns
+	local cpuColumn = ui.cpuColumn
+	local ramColumn = ui.ramColumn
+	local stoColumn = ui.stoColumn
 	local cpuCards = ui.cpuCards
 	local ramCards = ui.ramCards
 	local stoCards = ui.stoCards
 	local statsBox = ui.statsBox
 	local prestigeBox = ui.prestigeBox
 	local toastArea = ui.toastArea
+	local branchConfigs = {
+		CPU = {
+			column = cpuColumn,
+			cards = cpuCards,
+			attribute = "AutoBuyCPU",
+		},
+		RAM = {
+			column = ramColumn,
+			cards = ramCards,
+			attribute = "AutoBuyRAM",
+		},
+		STORAGE = {
+			column = stoColumn,
+			cards = stoCards,
+			attribute = "AutoBuySTORAGE",
+		},
+	}
+	local autoToggleButtons = {}
+	local autoToggleState = {}
+	local autoTogglePending = {}
 
 	local dataValueLabel = safeFind(topBar, "DataValue")
 	if not dataValueLabel then
@@ -482,6 +524,29 @@ function LoadingInitializer.Init()
 
 	local prestigeButton = safeFind(prestigeBox, "PrestigeButton")
 	local prestigeOverlay = safeFind(prestigeBox, "PrestigeLockedOverlay")
+	local prestigeRequestInFlight = false
+	local lastPrestigeSynced = 0
+	local prestigeFailsafeToken = 0
+
+	local function setPrestigeAttribute(value)
+		if player and player.SetAttribute then
+			player:SetAttribute("PrestigeInProgress", value and true or false)
+		end
+	end
+
+	local function schedulePrestigeFailsafe()
+		prestigeFailsafeToken += 1
+		local token = prestigeFailsafeToken
+		task.delay(PRESTIGE_FAILSAFE_DELAY, function()
+			if token ~= prestigeFailsafeToken then
+				return
+			end
+			if prestigeRequestInFlight then
+				prestigeRequestInFlight = false
+				setPrestigeAttribute(false)
+			end
+		end)
+	end
 
 	local template = playerGui:FindFirstChild("UpgradeCardTemplate")
 	if not template then
@@ -501,7 +566,9 @@ function LoadingInitializer.Init()
 	local requestSync = safeFind(remotesFolder, "RequestSync")
 	local buyUpgradeEvent = safeFind(remotesFolder, "RequestBuyUpgrade")
 	local prestigeEvent = safeFind(remotesFolder, "RequestPrestige")
-	if not (requestSync and buyUpgradeEvent and prestigeEvent) then
+	local toggleAutoBuyEvent = safeFind(remotesFolder, "ToggleAutoBuy")
+	local autoBuyFeedbackEvent = safeFind(remotesFolder, "AutoBuyFeedback")
+	if not (requestSync and buyUpgradeEvent and prestigeEvent and toggleAutoBuyEvent and autoBuyFeedbackEvent) then
 		warn("[TerminalClient] Required remotes missing")
 		return
 	end
@@ -582,6 +649,57 @@ function LoadingInitializer.Init()
 		return math.max(level, 0)
 	end
 
+	local pendingBuyMaxQueue = {}
+
+	local function queueBuyMaxFeedback(upgradeId)
+		table.insert(pendingBuyMaxQueue, {
+			id = upgradeId,
+			startLevel = getUpgradeLevel(upgradeId),
+			timestamp = os.clock(),
+		})
+	end
+
+	local function processPendingBuyMaxFeedback()
+		if #pendingBuyMaxQueue == 0 then
+			return
+		end
+
+		local remaining = {}
+		for _, pending in ipairs(pendingBuyMaxQueue) do
+			local newLevel = getUpgradeLevel(pending.id)
+			local delta = math.max(newLevel - (pending.startLevel or 0), 0)
+
+			if delta > 0 then
+				local cardData = upgradeCards[pending.id]
+				if showToast then
+					if cardData and cardData.definition then
+						local message = string.format(
+							"Bought %d %s of %s",
+							delta,
+							delta == 1 and "level" or "levels",
+							cardData.definition.name
+						)
+						showToast(message)
+					else
+						showToast(string.format("Bought %d upgrades", delta))
+					end
+				end
+
+				if delta >= 10 then
+					flashMaxBadge(cardData)
+				end
+			else
+				if os.clock() - pending.timestamp < PENDING_MAX_TIMEOUT then
+					table.insert(remaining, pending)
+				else
+					playErrorFeedback(upgradeCards[pending.id])
+				end
+			end
+		end
+
+		pendingBuyMaxQueue = remaining
+	end
+
 	local function applyStateToUI(state)
 		if not state then
 			return
@@ -638,6 +756,300 @@ function LoadingInitializer.Init()
 		stroke.Transparency = active and 0.25 or 0.7
 	end
 
+	local function ensureInteractionScale(button)
+		if not button then
+			return nil
+		end
+
+		local scale = button:FindFirstChild("InteractionScale")
+		if not scale then
+			scale = Instance.new("UIScale")
+			scale.Name = "InteractionScale"
+			scale.Scale = 1
+			scale.Parent = button
+		end
+
+		return scale
+	end
+
+	local function playButtonFeedback(button, isMax)
+		if not button or not TweenService then
+			return
+		end
+
+		local scale = ensureInteractionScale(button)
+		if not scale then
+			return
+		end
+
+		local target = isMax and 1.08 or 1.03
+		local tweenIn = TweenService:Create(
+			scale,
+			TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+			{ Scale = target }
+		)
+		tweenIn:Play()
+		tweenIn.Completed:Connect(function()
+			TweenService:Create(
+				scale,
+				TweenInfo.new(0.12, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+				{ Scale = 1 }
+			):Play()
+		end)
+	end
+
+	local function playErrorFeedback(cardData)
+		local card = cardData and cardData.card
+		if not card or not TweenService then
+			return
+		end
+
+		local stroke = card:FindFirstChild("ErrorStroke")
+		if not stroke then
+			stroke = Instance.new("UIStroke")
+			stroke.Name = "ErrorStroke"
+			stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+			stroke.Color = Color3.fromRGB(255, 115, 115)
+			stroke.Transparency = 1
+			stroke.Parent = card
+		end
+
+		local flash = TweenService:Create(
+			stroke,
+			TweenInfo.new(0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+			{ Transparency = 0.2 }
+		)
+		flash:Play()
+		flash.Completed:Connect(function()
+			if not stroke.Parent then
+				return
+			end
+			TweenService:Create(
+				stroke,
+				TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.In),
+				{ Transparency = 1 }
+			):Play()
+		end)
+	end
+
+	local function flashMaxBadge(cardData)
+		local card = cardData and cardData.card
+		if not card or not TweenService then
+			return
+		end
+
+		local badge = card:FindFirstChild("MaxBadge")
+		if not badge then
+			badge = Instance.new("TextLabel")
+			badge.Name = "MaxBadge"
+			badge.AnchorPoint = Vector2.new(1, 0)
+			badge.Position = UDim2.new(1, -6, 0, 6)
+			badge.Size = UDim2.new(0, 60, 0, 22)
+			badge.BackgroundColor3 = Color3.fromRGB(72, 255, 170)
+			badge.BackgroundTransparency = 0.1
+			badge.TextColor3 = Color3.fromRGB(10, 35, 20)
+			badge.Font = Enum.Font.GothamBold
+			badge.TextSize = 12
+			badge.TextXAlignment = Enum.TextXAlignment.Center
+			badge.TextYAlignment = Enum.TextYAlignment.Center
+			badge.Text = "MAX"
+			badge.ZIndex = card.ZIndex + 1
+			badge.Visible = false
+
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0, 6)
+			corner.Parent = badge
+
+			badge.Parent = card
+		end
+
+		badge.Visible = true
+		badge.TextTransparency = 1
+
+		local fadeIn = TweenService:Create(
+			badge,
+			TweenInfo.new(0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+			{ TextTransparency = 0 }
+		)
+		fadeIn:Play()
+
+		task.delay(0.6, function()
+			if not badge.Parent then
+				return
+			end
+			TweenService:Create(
+				badge,
+				TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.In),
+				{ TextTransparency = 1 }
+			):Play()
+		end)
+	end
+
+	local function enforceMinimumButtonHeight(button)
+		if not button or not button:IsA("GuiButton") then
+			return
+		end
+
+		local size = button.Size
+		if size.Y.Scale == 0 and size.Y.Offset < MIN_BUTTON_HEIGHT then
+			button.Size = UDim2.new(size.X.Scale, size.X.Offset, size.Y.Scale, MIN_BUTTON_HEIGHT)
+		end
+	end
+
+	local function pulseBranchColumn(branchName)
+		local config = branchConfigs[branchName]
+		local column = config and config.column
+		if not column or not column:IsA("GuiObject") or not TweenService then
+			return
+		end
+
+		local stroke = column:FindFirstChild("AutoPulseStroke")
+		if not stroke then
+			stroke = Instance.new("UIStroke")
+			stroke.Name = "AutoPulseStroke"
+			stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+			stroke.Thickness = 3
+			stroke.Color = AUTO_PULSE_COLOR
+			stroke.Transparency = 1
+			stroke.Parent = column
+		end
+
+		local fadeIn = TweenService:Create(
+			stroke,
+			TweenInfo.new(0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+			{ Transparency = 0.15 }
+		)
+		fadeIn:Play()
+		fadeIn.Completed:Connect(function()
+			if not stroke.Parent then
+				return
+			end
+			TweenService:Create(
+				stroke,
+				TweenInfo.new(AUTO_PULSE_FADE_TIME, Enum.EasingStyle.Sine, Enum.EasingDirection.In),
+				{ Transparency = 1 }
+			):Play()
+		end)
+	end
+
+	local function updateAutoToggleVisual(branchName)
+		local button = autoToggleButtons[branchName]
+		if not button or not button:IsA("GuiButton") then
+			return
+		end
+
+		local isEnabled = autoToggleState[branchName] == true
+		local isPending = autoTogglePending[branchName] ~= nil
+		local backgroundColor = isEnabled and AUTO_TOGGLE_ON_COLOR or AUTO_TOGGLE_OFF_COLOR
+		button.BackgroundColor3 = backgroundColor
+		button.Text = "AUTO"
+		button.TextColor3 = AUTO_TOGGLE_TEXT_COLOR
+		button.TextTransparency = isPending and 0.35 or 0
+		button.AutoButtonColor = false
+		button.Active = not isPending
+
+		local stroke = button:FindFirstChild("AutoToggleStroke")
+		if stroke then
+			if isEnabled then
+				stroke.Color = backgroundColor:Lerp(Color3.new(1, 1, 1), 0.35)
+				stroke.Transparency = isPending and 0.3 or 0.15
+			else
+				stroke.Color = Color3.fromRGB(90, 110, 120)
+				stroke.Transparency = isPending and 0.5 or 0.35
+			end
+		end
+	end
+
+	local function refreshAutoToggleState(branchName)
+		local config = branchConfigs[branchName]
+		if not config or not config.attribute then
+			autoToggleState[branchName] = false
+		else
+			autoToggleState[branchName] = player:GetAttribute(config.attribute) == true
+		end
+
+		updateAutoToggleVisual(branchName)
+	end
+
+	local function createAutoToggleButton(branchName, column)
+		if not column or not column:IsA("GuiObject") then
+			return nil
+		end
+
+		local button = Instance.new("TextButton")
+		button.Name = string.format("%sAutoToggle", branchName)
+		button.AutoButtonColor = false
+		button.BackgroundColor3 = AUTO_TOGGLE_OFF_COLOR
+		button.BorderSizePixel = 0
+		button.LayoutOrder = -100
+		button.Size = UDim2.new(1, 0, 0, AUTO_TOGGLE_MIN_HEIGHT)
+		button.Text = "AUTO"
+		button.TextColor3 = AUTO_TOGGLE_TEXT_COLOR
+		button.TextSize = 16
+		button.Font = Enum.Font.GothamBold
+		button.TextWrapped = false
+		button.ZIndex = (column.ZIndex or 1) + 1
+		button.Parent = column
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = button
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Name = "AutoToggleStroke"
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Thickness = 2
+		stroke.Transparency = 0.35
+		stroke.Parent = button
+
+		ensureInteractionScale(button)
+		return button
+	end
+
+	local function setupAutoToggleButtons()
+		for branchName, config in pairs(branchConfigs) do
+			local branchKey = branchName
+			local branchConfig = config
+			if branchConfig.column and not autoToggleButtons[branchKey] then
+				local button = createAutoToggleButton(branchKey, branchConfig.column)
+				if button then
+					autoToggleButtons[branchKey] = button
+					refreshAutoToggleState(branchKey)
+
+					if player and player.GetAttributeChangedSignal and branchConfig.attribute then
+						player:GetAttributeChangedSignal(branchConfig.attribute):Connect(function()
+							autoTogglePending[branchKey] = nil
+							refreshAutoToggleState(branchKey)
+						end)
+					end
+
+					button.Activated:Connect(function()
+						if not toggleAutoBuyEvent then
+							return
+						end
+						if autoTogglePending[branchKey] then
+							return
+						end
+
+						local desiredState = not (autoToggleState[branchKey] == true)
+						autoTogglePending[branchKey] = os.clock()
+						updateAutoToggleVisual(branchKey)
+						playButtonFeedback(button, false)
+						toggleAutoBuyEvent:FireServer(branchKey, desiredState)
+
+						task.delay(AUTO_TOGGLE_PENDING_TIMEOUT, function()
+							local pendingSince = autoTogglePending[branchKey]
+							if pendingSince and os.clock() - pendingSince >= AUTO_TOGGLE_PENDING_TIMEOUT then
+								autoTogglePending[branchKey] = nil
+								refreshAutoToggleState(branchKey)
+							end
+						end)
+					end)
+				end
+			end
+		end
+	end
+
 	local function refreshCard(upgradeId)
 		local cardData = upgradeCards[upgradeId]
 		if not cardData then
@@ -669,14 +1081,20 @@ function LoadingInitializer.Init()
 			end
 		end
 
-		local buttonEnabled = cardData.button and not atMax and meetsRequirements and hasCost and canAfford
+		local isUnlocked = not atMax and meetsRequirements and hasCost
+		cardData.isUnlocked = isUnlocked
+		cardData.canAfford = isUnlocked and canAfford
+
 		if cardData.button then
 			cardData.button.Text = atMax and "MAX" or "BUY"
-			cardData.button.Active = buttonEnabled
-			cardData.button.AutoButtonColor = buttonEnabled
+			cardData.button.Active = isUnlocked
+			cardData.button.AutoButtonColor = isUnlocked and not isTouchOnlyDevice
+			if cardData.button:IsA("TextButton") then
+				cardData.button.TextTransparency = isUnlocked and 0 or 0.35
+			end
 		end
 
-		applyGlow(cardData.card, buttonEnabled)
+		applyGlow(cardData.card, cardData.canAfford == true)
 	end
 
 	local function refreshAllCards()
@@ -710,7 +1128,8 @@ function LoadingInitializer.Init()
 	local function applyState(newState)
 		playerState.data = typeof(newState.data) == "number" and newState.data or 0
 		playerState.upgrades = typeof(newState.upgrades) == "table" and newState.upgrades or {}
-		playerState.prestige = typeof(newState.prestige) == "number" and newState.prestige or 0
+		local prestigeValue = typeof(newState.prestige) == "number" and newState.prestige or 0
+		playerState.prestige = prestigeValue
 		playerState.corePower = typeof(newState.corePower) == "number" and newState.corePower or 0
 		if typeof(newState.dps) == "number" then
 			playerState.dps = newState.dps
@@ -737,6 +1156,14 @@ function LoadingInitializer.Init()
 		end
 
 		refreshAllCards()
+		processPendingBuyMaxFeedback()
+
+		if prestigeRequestInFlight and prestigeValue > lastPrestigeSynced then
+			prestigeRequestInFlight = false
+			setPrestigeAttribute(false)
+			prestigeFailsafeToken += 1
+		end
+		lastPrestigeSynced = prestigeValue
 	end
 
 	local function syncState()
@@ -758,20 +1185,125 @@ function LoadingInitializer.Init()
 		applyState(payload)
 	end
 
-	local function handleBuy(upgradeId)
+	local function handleBuy(upgradeId, mode)
 		if not buyUpgradeEvent then
 			return
 		end
-		buyUpgradeEvent:FireServer(upgradeId)
-		task.defer(function()
-			syncState()
+
+		local normalizedMode = mode == BUY_MODE_MAX and BUY_MODE_MAX or BUY_MODE_SINGLE
+		local cardData = upgradeCards[upgradeId]
+		if not cardData or not cardData.isUnlocked then
+			playErrorFeedback(cardData)
+			return
+		end
+
+		if not cardData.canAfford then
+			playErrorFeedback(cardData)
+			return
+		end
+
+		local payload
+		if normalizedMode == BUY_MODE_MAX then
+			payload = {
+				upgradeId = upgradeId,
+				mode = BUY_MODE_MAX,
+			}
+			queueBuyMaxFeedback(upgradeId)
+		else
+			payload = upgradeId
+		end
+
+		playButtonFeedback(cardData.button, normalizedMode == BUY_MODE_MAX)
+		buyUpgradeEvent:FireServer(payload)
+		task.defer(syncState)
+	end
+
+	local function bindDesktopButton(button, upgradeId)
+		if not button or not button:IsA("GuiButton") then
+			return
+		end
+
+		button.MouseButton1Click:Connect(function()
+			handleBuy(upgradeId, BUY_MODE_SINGLE)
+		end)
+
+		if UserInputService.MouseEnabled then
+			button.MouseButton2Click:Connect(function()
+				handleBuy(upgradeId, BUY_MODE_MAX)
+			end)
+		end
+	end
+
+	local function bindTouchButton(button, upgradeId)
+		if not button or not button:IsA("GuiButton") then
+			return
+		end
+
+		local activeTouch
+		local touchToken = 0
+		local touchConnection
+		local longPressTriggered = false
+
+		local function resetTouch()
+			if touchConnection then
+				touchConnection:Disconnect()
+				touchConnection = nil
+			end
+			activeTouch = nil
+		end
+
+		button.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.Touch or activeTouch then
+				return
+			end
+
+			activeTouch = input
+			longPressTriggered = false
+			touchToken += 1
+			local currentToken = touchToken
+
+			if touchConnection then
+				touchConnection:Disconnect()
+			end
+			touchConnection = input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.Cancel then
+					resetTouch()
+				end
+			end)
+
+			task.delay(LONG_PRESS_THRESHOLD, function()
+				if activeTouch ~= input or longPressTriggered or touchToken ~= currentToken then
+					return
+				end
+
+				longPressTriggered = true
+				resetTouch()
+				handleBuy(upgradeId, BUY_MODE_MAX)
+			end)
+		end)
+
+		button.InputEnded:Connect(function(input)
+			if input ~= activeTouch then
+				return
+			end
+
+			local pressWasLong = longPressTriggered
+			resetTouch()
+			if pressWasLong then
+				return
+			end
+
+			handleBuy(upgradeId, BUY_MODE_SINGLE)
 		end)
 	end
 
 	local function handlePrestige()
-		if not prestigeEvent then
+		if not prestigeEvent or prestigeRequestInFlight then
 			return
 		end
+		prestigeRequestInFlight = true
+		setPrestigeAttribute(true)
+		schedulePrestigeFailsafe()
 		prestigeEvent:FireServer()
 		task.defer(function()
 			syncState()
@@ -794,9 +1326,13 @@ function LoadingInitializer.Init()
 			local button = card:FindFirstChild("BuyButton") or card:FindFirstChild("CardBuyButton")
 
 			if button then
-				button.MouseButton1Click:Connect(function()
-					handleBuy(definition.id)
-				end)
+				enforceMinimumButtonHeight(button)
+				button.AutoButtonColor = not isTouchOnlyDevice
+				if isTouchOnlyDevice then
+					bindTouchButton(button, definition.id)
+				else
+					bindDesktopButton(button, definition.id)
+				end
 			end
 
 			upgradeCards[definition.id] = {
@@ -864,10 +1400,27 @@ function LoadingInitializer.Init()
 	end
 
 	buildUpgradeCards()
+	setupAutoToggleButtons()
 	setLoadingStep("Initializing Terminal UI", 0.9)
 	ensureUiUpdateLoop()
 	syncState()
 	startSyncLoop()
+
+	if autoBuyFeedbackEvent then
+		autoBuyFeedbackEvent.OnClientEvent:Connect(function(branchName, amount)
+			local normalizedBranch = typeof(branchName) == "string" and string.upper(branchName) or nil
+			local totalPurchased = typeof(amount) == "number" and math.max(amount, 0) or 0
+			if not normalizedBranch or totalPurchased <= 0 then
+				return
+			end
+
+			pulseBranchColumn(normalizedBranch)
+
+			if totalPurchased >= AUTO_BUY_TOAST_THRESHOLD and showToast then
+				showToast(string.format("AUTO x%d (%s)", totalPurchased, normalizedBranch))
+			end
+		end)
+	end
 
 	if prestigeButton then
 		prestigeButton.MouseButton1Click:Connect(handlePrestige)
