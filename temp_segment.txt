@@ -1,0 +1,8 @@
+local function removePlayer(player)
+	activePlayers[player] = nil
+	stopAutosave(player)
+	savePlayerWithStatus(player)
+	PlayerDataService.Release(player)
+	storeStateByPlayer[player] = nil
+	storePlatformByPlayer[player] = nil
+	offlinePreviewSent[player]

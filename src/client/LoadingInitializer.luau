@@ -448,6 +448,7 @@ function LoadingInitializer.Init()
 	local safeArea = ui.safeArea
 	local topBar = ui.topBar
 	local main = ui.main
+	local rightPanel = ui.rightPanel
 	local columns = ui.columns
 	local cpuCards = ui.cpuCards
 	local ramCards = ui.ramCards
@@ -482,6 +483,7 @@ function LoadingInitializer.Init()
 	local globalStatsPrestigeValue
 	local serverPowerPanel
 	local serverPowerLabel
+	local autoBuyPresetsFrame = rightPanel and safeFind(rightPanel, "AutoBuyPresets")
 
 	local function ensureSessionBonusUI()
 		if sessionBonusPanel and sessionBonusPanel.Parent == rightPanel then
@@ -1205,32 +1207,53 @@ function LoadingInitializer.Init()
 		return
 	end
 
-	local requestSync = safeFind(remotesFolder, "RequestSync")
-	local buyUpgradeEvent = safeFind(remotesFolder, "RequestBuyUpgrade")
-	local prestigeEvent = safeFind(remotesFolder, "RequestPrestige")
-	local prestigePreviewEvent = safeFind(remotesFolder, "PrestigePreviewUpdate")
-	local requestPrestigePreview = safeFind(remotesFolder, "RequestPrestigePreview")
-	local sessionBonusEvent = safeFind(remotesFolder, "SessionBonusUpdate")
-	local globalAnnouncementEvent = safeFind(remotesFolder, "GlobalAnnouncement")
-	local globalStatsEvent = safeFind(remotesFolder, "GlobalStatsUpdate")
-	local serverPowerEvent = safeFind(remotesFolder, "ServerPowerUpdate")
-	local systemNotificationEvent = safeFind(remotesFolder, "SystemNotification")
+	local function waitForRemote(name)
+		return waitForChildWithTimeout(remotesFolder, name) or safeFind(remotesFolder, name)
+	end
+
+	local requestSync = waitForRemote("RequestSync")
+	local buyUpgradeEvent = waitForRemote("RequestBuyUpgrade")
+	local prestigeEvent = waitForRemote("RequestPrestige")
+	local prestigePreviewEvent = waitForRemote("PrestigePreviewUpdate")
+	local requestPrestigePreview = waitForRemote("RequestPrestigePreview")
+	local sessionBonusEvent = waitForRemote("SessionBonusUpdate")
+	local globalAnnouncementEvent = waitForRemote("GlobalAnnouncement")
+	local globalStatsEvent = waitForRemote("GlobalStatsUpdate")
+	local serverPowerEvent = waitForRemote("ServerPowerUpdate")
+	local systemNotificationEvent = waitForRemote("SystemNotification")
+	local autoBuyPresetApplyEvent = safeFind(remotesFolder, "AutoBuyPresetApply")
+	local autoBuyPresetSaveEvent = safeFind(remotesFolder, "AutoBuyPresetSave")
+	local autoBuyPresetStateEvent = safeFind(remotesFolder, "AutoBuyPresetState")
+	local requestAutoBuyPresets = safeFind(remotesFolder, "RequestAutoBuyPresets")
 	if
 		not (
 			requestSync
 			and buyUpgradeEvent
 			and prestigeEvent
 			and prestigePreviewEvent
-				and requestPrestigePreview
-				and sessionBonusEvent
-				and globalAnnouncementEvent
-				and globalStatsEvent
-				and serverPowerEvent
-				and systemNotificationEvent
-			)
-		then
-			warn("[TerminalClient] Required remotes missing")
-			return
+			and requestPrestigePreview
+			and sessionBonusEvent
+			and globalAnnouncementEvent
+			and globalStatsEvent
+			and serverPowerEvent
+			and systemNotificationEvent
+		)
+	then
+		warn("[TerminalClient] Required remotes missing")
+		return
+	end
+
+	local pendingPrestigePreviewPayloads = {}
+	local prestigePreviewHandler
+
+	if prestigePreviewEvent then
+		prestigePreviewEvent.OnClientEvent:Connect(function(payload)
+			if prestigePreviewHandler then
+				prestigePreviewHandler(payload)
+			else
+				table.insert(pendingPrestigePreviewPayloads, payload)
+			end
+		end)
 	end
 
 	local UpgradeConfig = require(sharedFolder:WaitForChild("UpgradeConfig"))
@@ -1293,6 +1316,15 @@ function LoadingInitializer.Init()
 		prestige = 0,
 		corePower = 0,
 	}
+	local autoBuyPresetButtons = {}
+	local autoBuyPresetSaveButton
+	local currentPresetSettings = nil
+	local activePresetIndex = nil
+	local lastPresetIndex = 1
+	local recommendedPresetIndex = nil
+	local presetButtonCooldowns = {}
+	local pendingPresetSaveToast = false
+	local lastRecommendationContext = nil
 	local cachedState = nil
 	local uiUpdateStarted = false
 	local displayedData = nil
@@ -1361,6 +1393,14 @@ function LoadingInitializer.Init()
 		updatePreviewText(payload)
 	end
 
+	prestigePreviewHandler = handlePrestigePreview
+	if #pendingPrestigePreviewPayloads > 0 then
+		for _, pending in ipairs(pendingPrestigePreviewPayloads) do
+			prestigePreviewHandler(pending)
+		end
+		table.clear(pendingPrestigePreviewPayloads)
+	end
+
 	local function requestInitialPrestigePreview()
 		if not requestPrestigePreview then
 			return
@@ -1376,9 +1416,6 @@ function LoadingInitializer.Init()
 		end)
 	end
 
-	if prestigePreviewEvent then
-		prestigePreviewEvent.OnClientEvent:Connect(handlePrestigePreview)
-	end
 	requestInitialPrestigePreview()
 	if sessionBonusEvent then
 		sessionBonusEvent.OnClientEvent:Connect(handleSessionBonusUpdate)
@@ -1464,6 +1501,321 @@ function LoadingInitializer.Init()
 		setPrestigeState(storageTier >= 3)
 	end
 
+	local AUTO_PRESET_COUNT = 3
+	local MID_GAME_DPS_THRESHOLD = 125000
+	local STORAGE_LAG_DELTA = 5
+	local LEVEL_BUCKET_SIZE = 5
+
+	local function ensureRecommendedTag(buttonInfo)
+		if not buttonInfo or not buttonInfo.button then
+			return nil
+		end
+
+		local tag = buttonInfo.recommendedLabel
+		if tag and tag.Parent == buttonInfo.button then
+			return tag
+		end
+
+		tag = Instance.new("TextLabel")
+		tag.Name = "RecommendedTag"
+		tag.BackgroundTransparency = 1
+		tag.Text = "* RECOMMENDED"
+		tag.Font = Enum.Font.GothamBold
+		tag.TextSize = 10
+		tag.TextColor3 = Color3.fromRGB(255, 237, 178)
+		tag.TextTransparency = 0.2
+		tag.AnchorPoint = Vector2.new(0, 0)
+		tag.Position = UDim2.new(0, 6, 0, 6)
+		tag.Size = UDim2.new(0, 0, 0, 0)
+		tag.AutomaticSize = Enum.AutomaticSize.XY
+		tag.ZIndex = (buttonInfo.button.ZIndex or 1) + 1
+		tag.Visible = false
+		tag.Parent = buttonInfo.button
+		buttonInfo.recommendedLabel = tag
+		return tag
+	end
+
+	local function stylePresetButton(buttonInfo, isActive, isRecommended)
+		if not buttonInfo or not buttonInfo.button then
+			return
+		end
+		local button = buttonInfo.button
+
+		if not buttonInfo.baseColor then
+			buttonInfo.baseColor = button.BackgroundColor3
+			buttonInfo.baseTransparency = button.BackgroundTransparency
+		end
+
+		local stroke = buttonInfo.stroke
+		if not stroke then
+			stroke = button:FindFirstChildOfClass("UIStroke")
+			if not stroke then
+				stroke = Instance.new("UIStroke")
+				stroke.Name = "PresetStroke"
+				stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+				stroke.Parent = button
+			end
+			buttonInfo.stroke = stroke
+			buttonInfo.baseStrokeColor = stroke.Color
+			buttonInfo.baseStrokeTransparency = stroke.Transparency
+			buttonInfo.baseStrokeThickness = stroke.Thickness
+		end
+
+		local highlightColor = Color3.fromRGB(255, 247, 200)
+		local restingColor = buttonInfo.baseColor or Color3.fromRGB(34, 40, 49)
+		if isActive then
+			button.BackgroundColor3 = restingColor:Lerp(highlightColor, 0.25)
+			button.BackgroundTransparency = math.clamp((buttonInfo.baseTransparency or 0) - 0.1, 0, 1)
+			stroke.Thickness = math.max(buttonInfo.baseStrokeThickness or 1, 2)
+			stroke.Transparency = 0.1
+			stroke.Color = Color3.fromRGB(255, 236, 160)
+		else
+			button.BackgroundColor3 = restingColor
+			button.BackgroundTransparency = buttonInfo.baseTransparency or 0
+			stroke.Thickness = buttonInfo.baseStrokeThickness or 1
+			stroke.Transparency = buttonInfo.baseStrokeTransparency or 0.6
+			stroke.Color = buttonInfo.baseStrokeColor or Color3.fromRGB(70, 88, 110)
+		end
+
+		local tag = ensureRecommendedTag(buttonInfo)
+		if tag then
+			if isRecommended then
+				if isActive then
+					tag.Text = "* ACTIVE"
+					tag.TextColor3 = Color3.fromRGB(255, 244, 200)
+				else
+					tag.Text = "* RECOMMENDED"
+					tag.TextColor3 = Color3.fromRGB(255, 237, 178)
+				end
+			end
+			tag.Visible = isRecommended
+		end
+	end
+
+	local function updateAutoBuyPresetVisuals()
+		for index, buttonInfo in pairs(autoBuyPresetButtons) do
+			local isActive = activePresetIndex == index
+			local isRecommended = recommendedPresetIndex == index
+			stylePresetButton(buttonInfo, isActive, isRecommended)
+		end
+	end
+
+	local function sumUpgradesForPrefix(prefix)
+		local total = 0
+		for upgradeId, level in pairs(playerState.upgrades or {}) do
+			if typeof(upgradeId) == "string" and string.sub(upgradeId, 1, #prefix) == prefix then
+				if typeof(level) == "number" and level > 0 then
+					total += level
+				end
+			end
+		end
+		return total
+	end
+
+	local function determineRecommendedPreset()
+		local prestige = typeof(playerState.prestige) == "number" and playerState.prestige or 0
+		local dps = typeof(playerState.dps) == "number" and playerState.dps or 0
+		local cpuLevels = sumUpgradesForPrefix("cpu_")
+		local ramLevels = sumUpgradesForPrefix("ram_")
+		local storageLevels = sumUpgradesForPrefix("storage_")
+		local recommended = 1
+
+		if prestige == 0 then
+			recommended = 1
+		elseif prestige >= 2 and storageLevels + STORAGE_LAG_DELTA < math.min(cpuLevels, ramLevels) then
+			recommended = 3
+		elseif prestige >= 1 and dps < MID_GAME_DPS_THRESHOLD then
+			recommended = 2
+		else
+			recommended = 1
+		end
+
+		local context = {
+			prestige = prestige,
+			dpsBucket = dps < MID_GAME_DPS_THRESHOLD and "low" or "high",
+			cpuBucket = math.floor(cpuLevels / LEVEL_BUCKET_SIZE),
+			ramBucket = math.floor(ramLevels / LEVEL_BUCKET_SIZE),
+			storageBucket = math.floor(storageLevels / LEVEL_BUCKET_SIZE),
+		}
+
+		return recommended, context
+	end
+
+	local function updateAutoBuyRecommendation(force)
+		local recommended, context = determineRecommendedPreset()
+		if not recommended then
+			return
+		end
+
+		local contextChanged = force or not lastRecommendationContext
+		if not contextChanged then
+			for key, value in pairs(context) do
+				if lastRecommendationContext[key] ~= value then
+					contextChanged = true
+					break
+				end
+			end
+		end
+
+		if contextChanged or recommendedPresetIndex ~= recommended then
+			lastRecommendationContext = context
+			recommendedPresetIndex = recommended
+			updateAutoBuyPresetVisuals()
+		end
+	end
+
+	local function handleAutoBuyPresetState(payload)
+		if typeof(payload) ~= "table" then
+			return
+		end
+
+		if typeof(payload.presets) == "table" then
+			for index, preset in ipairs(payload.presets) do
+				local buttonInfo = autoBuyPresetButtons[index]
+				if buttonInfo and buttonInfo.button and typeof(preset) == "table" and typeof(preset.name) == "string" then
+					buttonInfo.button.Text = preset.name
+				end
+			end
+		end
+
+		if typeof(payload.settings) == "table" then
+			currentPresetSettings = {
+				enabled = table.clone(payload.settings.enabled or {}),
+				priority = table.clone(payload.settings.priority or {}),
+			}
+		end
+
+		if typeof(payload.activePreset) == "number" then
+			activePresetIndex = math.clamp(math.floor(payload.activePreset + 0.5), 1, AUTO_PRESET_COUNT)
+			lastPresetIndex = activePresetIndex
+		else
+			activePresetIndex = nil
+		end
+
+		for index, buttonInfo in pairs(autoBuyPresetButtons) do
+			if buttonInfo.button then
+				buttonInfo.button.Active = true
+				buttonInfo.button.AutoButtonColor = true
+			end
+		end
+		if autoBuyPresetSaveButton then
+			autoBuyPresetSaveButton.Active = true
+		end
+		table.clear(presetButtonCooldowns)
+
+		updateAutoBuyPresetVisuals()
+
+		if pendingPresetSaveToast then
+			showToast("Preset Saved")
+			pendingPresetSaveToast = false
+		end
+	end
+
+	local function throttlePresetButton(index)
+		local info = autoBuyPresetButtons[index]
+		if info and info.button then
+			info.button.Active = false
+		end
+		presetButtonCooldowns[index] = true
+		task.delay(1.5, function()
+			presetButtonCooldowns[index] = nil
+			local refreshed = autoBuyPresetButtons[index]
+			if refreshed and refreshed.button then
+				refreshed.button.Active = true
+			end
+		end)
+	end
+
+	local function handlePresetApply(index)
+		if not autoBuyPresetApplyEvent or not autoBuyPresetButtons[index] then
+			return
+		end
+		if presetButtonCooldowns[index] then
+			return
+		end
+
+		throttlePresetButton(index)
+		autoBuyPresetApplyEvent:FireServer(index)
+		lastPresetIndex = index
+	end
+
+	local function handlePresetSave()
+		if not autoBuyPresetSaveEvent or not currentPresetSettings then
+			return
+		end
+
+		local targetIndex = activePresetIndex or lastPresetIndex or 1
+		local payload = {
+			enabled = table.clone(currentPresetSettings.enabled or {}),
+			priority = table.clone(currentPresetSettings.priority or {}),
+		}
+
+		if autoBuyPresetSaveButton then
+			autoBuyPresetSaveButton.Active = false
+		end
+		autoBuyPresetSaveEvent:FireServer(targetIndex, payload)
+		pendingPresetSaveToast = true
+		task.delay(1.5, function()
+			if autoBuyPresetSaveButton then
+				autoBuyPresetSaveButton.Active = true
+			end
+		end)
+	end
+
+	local function initAutoBuyPresetUI()
+		if not autoBuyPresetsFrame then
+			if rightPanel then
+				autoBuyPresetsFrame = (waitForChildWithTimeout(rightPanel, "AutoBuyPresets"))
+			end
+		end
+
+		if not autoBuyPresetsFrame then
+			return
+		end
+
+		for index = 1, AUTO_PRESET_COUNT do
+			local button = safeFind(autoBuyPresetsFrame, "Preset" .. index)
+			if button and button:IsA("GuiButton") then
+				autoBuyPresetButtons[index] = {
+					button = button,
+					baseColor = button.BackgroundColor3,
+					baseTransparency = button.BackgroundTransparency,
+					stroke = button:FindFirstChildOfClass("UIStroke"),
+				}
+				button.MouseButton1Click:Connect(function()
+					handlePresetApply(index)
+				end)
+			end
+		end
+
+		autoBuyPresetSaveButton = safeFind(autoBuyPresetsFrame, "SavePreset")
+		if autoBuyPresetSaveButton and autoBuyPresetSaveButton:IsA("GuiButton") then
+			autoBuyPresetSaveButton.MouseButton1Click:Connect(handlePresetSave)
+		end
+	end
+
+	local function requestAutoBuyPresetState()
+		if not requestAutoBuyPresets then
+			return
+		end
+
+		task.spawn(function()
+			local ok, response = pcall(function()
+				return requestAutoBuyPresets:InvokeServer()
+			end)
+			if ok and response then
+				handleAutoBuyPresetState(response)
+			end
+		end)
+	end
+
+	initAutoBuyPresetUI()
+	if autoBuyPresetStateEvent then
+		autoBuyPresetStateEvent.OnClientEvent:Connect(handleAutoBuyPresetState)
+	end
+	requestAutoBuyPresetState()
+	updateAutoBuyRecommendation(true)
+
 	local function ensureUiUpdateLoop()
 		if uiUpdateStarted then
 			return
@@ -1513,6 +1865,7 @@ function LoadingInitializer.Init()
 		end
 
 		refreshAllCards()
+		updateAutoBuyRecommendation()
 	end
 
 	local function syncState()

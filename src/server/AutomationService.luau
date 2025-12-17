@@ -15,15 +15,43 @@ local BLOCK_TIMEOUT = 5
 local BASE_INTERVAL = 0.5
 local SUMMARY_INTERVAL = 120
 local automationById = {}
+local isAutomationUnlocked
 local DEFAULT_PRIORITY = AutomationConfig.GetDefaultPriority()
 local maxSpeedTier = AutomationConfig.GetMaxSpeedTier()
 local presetSlotCount = AutomationConfig.GetPresetSlotCount()
+local presetStateListeners = {}
 local playerSettingsCache = {}
 local lastProcessTimes = {}
 local blockState = {}
 local analyticsByPlayer = {}
 local sessionStartTimes = {}
 local statePublisher = nil
+
+local function notifyPresetStateChanged(player)
+	for _, callback in ipairs(presetStateListeners) do
+		local ok, err = pcall(callback, player)
+		if not ok then
+			warn("[AutomationService] Preset listener failed:", err)
+		end
+	end
+end
+
+function AutomationService.OnPresetStateChanged(callback)
+	if typeof(callback) ~= "function" then
+		return function() end
+	end
+
+	table.insert(presetStateListeners, callback)
+
+	return function()
+		for index, stored in ipairs(presetStateListeners) do
+			if stored == callback then
+				table.remove(presetStateListeners, index)
+				break
+			end
+		end
+	end
+end
 
 local BRANCH_SHORT_NAMES = {
 	CPU = "CPU",
@@ -73,7 +101,9 @@ local function sanitizePresetEntry(payload, fallback, allowRename)
 			if automationById[automationId] and not table.find(priorityList, automationId) then
 				table.insert(priorityList, automationId)
 			end
-		}
+		end
+	
+		
 	elseif fallback and typeof(fallback.priority) == "table" then
 		for _, automationId in ipairs(fallback.priority) do
 			if automationById[automationId] and not table.find(priorityList, automationId) then
@@ -90,6 +120,31 @@ local function sanitizePresetEntry(payload, fallback, allowRename)
 
 	sanitized.priority = priorityList
 	return sanitized
+end
+
+local function isStudio()
+        return RunService:IsStudio()
+end
+
+local function logCustomEvent(player: Player, eventName: string, value, payload)
+        if isStudio() then
+                return
+        end
+
+        local sanitized = typeof(eventName) == "string" and eventName or ""
+        if sanitized == "" then
+                return
+        end
+
+        task.spawn(function()
+                local ok, err = pcall(function()
+                        AnalyticsService:LogCustomEvent(player, sanitized, value or 1, payload)
+                end)
+
+                if not ok then
+                        warn("[AutomationService] Failed to log custom event", sanitized, err)
+                end
+        end)
 end
 
 local function sanitizePresets(presets)
@@ -203,25 +258,275 @@ local function clonePresetForClient(preset)
 	}
 end
 
-local function getAnalyticsState(player)
-	local state = analyticsByPlayer[player]
-	if state then
-		return state
+local function normalizePriorityList(priorityList)
+	local normalized = {}
+	if typeof(priorityList) == "table" then
+		for _, automationId in ipairs(priorityList) do
+			if automationById[automationId] and not table.find(normalized, automationId) then
+				table.insert(normalized, automationId)
+			end
+		end
 	end
 
-	state = {
-		purchases = 0,
-		spent = 0,
-		upgrades = 0,
-		stallCount = 0,
-		timeEnabled = 0,
-		enabledStart = nil,
-		lastSummary = time(),
-		toggleSnapshot = {},
-		prioritySignature = "",
+	for _, automationId in ipairs(DEFAULT_PRIORITY) do
+		if not table.find(normalized, automationId) then
+			table.insert(normalized, automationId)
+		end
+	end
+
+	return normalized
+end
+
+local function normalizeEnabledForPlayer(source, playerData)
+	local normalized = {}
+	local data = typeof(playerData) == "table" and playerData or {}
+
+	for _, definition in ipairs(AutomationConfig.GetAll()) do
+		if isAutomationUnlocked(data, definition) then
+			normalized[definition.id] = source and source[definition.id] == true
+		else
+			normalized[definition.id] = false
+		end
+	end
+
+	return normalized
+end
+
+local function projectPresetForPlayer(playerData, preset)
+	if typeof(preset) ~= "table" then
+		return nil
+	end
+
+	return {
+		enabled = normalizeEnabledForPlayer(preset.enabled, playerData),
+		priority = normalizePriorityList(preset.priority),
+		name = preset.name,
 	}
-	analyticsByPlayer[player] = state
+end
+
+local function determineActivePresetIndex(settings, playerData)
+	if typeof(settings) ~= "table" or typeof(settings.presets) ~= "table" then
+		return nil
+	end
+
+	local currentEnabled = normalizeEnabledForPlayer(settings.enabled, playerData)
+	local currentPriority = normalizePriorityList(settings.priority)
+
+	for index, preset in ipairs(settings.presets) do
+		local projection = projectPresetForPlayer(playerData, preset)
+		local matches = projection ~= nil
+
+		if matches then
+			for automationId, value in pairs(projection.enabled) do
+				if currentEnabled[automationId] ~= value then
+					matches = false
+					break
+				end
+			end
+		end
+
+		if matches then
+			for orderIndex, automationId in ipairs(projection.priority) do
+				if currentPriority[orderIndex] ~= automationId then
+					matches = false
+					break
+				end
+			end
+		end
+
+		if matches then
+			return index
+		end
+	end
+
+	return nil
+end
+
+local function buildPresetState(player, settings, playerData)
+	if typeof(settings) ~= "table" then
+		return nil
+	end
+
+	local state = {
+		presets = {},
+		settings = {
+			enabled = normalizeEnabledForPlayer(settings.enabled, playerData),
+			priority = normalizePriorityList(settings.priority),
+		},
+		activePreset = determineActivePresetIndex(settings, playerData),
+	}
+
+	for index = 1, presetSlotCount do
+		local preset = settings.presets and settings.presets[index]
+		if preset then
+			state.presets[index] = clonePresetForClient(preset)
+		end
+	end
+
 	return state
+end
+
+local function getAnalyticsState(player)
+        local state = analyticsByPlayer[player]
+        if state then
+                return state
+        end
+
+        state = {
+                purchases = 0,
+                spent = 0,
+                upgrades = 0,
+                stallCount = 0,
+                timeEnabled = 0,
+                enabledStart = nil,
+                lastSummary = time(),
+                toggleSignature = "",
+        }
+        analyticsByPlayer[player] = state
+        return state
+end
+
+local function getPrestigeLevel(player): number
+        local data = PlayerDataService.Get(player)
+        if typeof(data) ~= "table" then
+                return 0
+        end
+
+        local prestige = data.prestige
+        if typeof(prestige) ~= "number" then
+                return 0
+        end
+
+        return math.max(0, prestige)
+end
+
+local function getSessionTime(player)
+        local startTime = sessionStartTimes[player]
+        if not startTime then
+                return 0
+        end
+
+        return math.max(0, time() - startTime)
+end
+
+local anyAutomationEnabled
+
+local function recordEnabledTime(player, settings, now)
+        local analytics = getAnalyticsState(player)
+        local active = false
+        if anyAutomationEnabled then
+                active = anyAutomationEnabled(settings)
+        end
+
+        if active then
+                if not analytics.enabledStart then
+                        analytics.enabledStart = now
+                end
+        elseif analytics.enabledStart then
+                analytics.timeEnabled += math.max(0, now - analytics.enabledStart)
+                analytics.enabledStart = nil
+        end
+
+        return analytics, active
+end
+
+local function getToggleSignature(settings)
+        if typeof(settings) ~= "table" or typeof(settings.enabled) ~= "table" then
+                return ""
+        end
+
+        local flags = {
+                settings.enabled.auto_cpu == true,
+                settings.enabled.auto_ram == true,
+                settings.enabled.auto_storage == true,
+        }
+
+        return table.concat(flags, "|")
+end
+
+local function logAutoBuyToggle(player, settings)
+        if isStudio() then
+                return
+        end
+
+        local analytics = getAnalyticsState(player)
+        local order = getPriorityOrder(player, settings)
+        local prioritySignature = getPrioritySignature(order)
+        local toggleSignature = string.format("%s|%s", getToggleSignature(settings), prioritySignature)
+
+        if toggleSignature == analytics.toggleSignature then
+                return
+        end
+
+        analytics.toggleSignature = toggleSignature
+
+        local payload = {
+                CPU = settings.enabled.auto_cpu == true,
+                RAM = settings.enabled.auto_ram == true,
+                STORAGE = settings.enabled.auto_storage == true,
+                Priority = prioritySignature,
+                PrestigeLevel = getPrestigeLevel(player),
+        }
+
+        logCustomEvent(player, "AutoBuyToggle", 1, payload)
+end
+
+local function logAutoBuySummary(player, settings, force)
+        if isStudio() then
+                return
+        end
+
+        local now = time()
+        local analytics = getAnalyticsState(player)
+
+        if not force and (now - analytics.lastSummary) < SUMMARY_INTERVAL then
+                return
+        end
+
+        recordEnabledTime(player, settings, now)
+
+        local enabledTime = analytics.timeEnabled
+        if analytics.enabledStart then
+                enabledTime += math.max(0, now - analytics.enabledStart)
+        end
+
+        local totalSpent = math.max(0, analytics.spent)
+        local purchaseCount = math.max(0, analytics.purchases)
+        local stallCount = math.max(0, analytics.stallCount)
+        local upgradesGained = math.max(0, analytics.upgrades)
+
+        if not force and enabledTime <= 0 and purchaseCount <= 0 and stallCount <= 0 and upgradesGained <= 0 and totalSpent <= 0 then
+                return
+        end
+
+        local avgSpend = 0
+        if purchaseCount > 0 and totalSpent > 0 then
+                avgSpend = totalSpent / purchaseCount
+        end
+
+        local payload = {
+                PurchasesCount = purchaseCount,
+                TotalSpent = totalSpent,
+                UpgradesGained = upgradesGained,
+                TimeEnabledSec = enabledTime,
+                StallCount = stallCount,
+                PrestigeLevel = getPrestigeLevel(player),
+                SessionTimeSec = getSessionTime(player),
+                AvgSpendPerPurchase = avgSpend,
+        }
+
+        logCustomEvent(player, "AutoBuySummary", 1, payload)
+
+        analytics.purchases = 0
+        analytics.spent = 0
+        analytics.upgrades = 0
+        analytics.stallCount = 0
+        analytics.timeEnabled = 0
+        analytics.lastSummary = now
+
+        if analytics.enabledStart then
+                analytics.enabledStart = now
+        end
 end
 
 local function getPlayerSettings(player)
@@ -240,7 +545,7 @@ local function getPlayerSettings(player)
 	return sanitized
 end
 
-local function isAutomationUnlocked(playerData, automation)
+isAutomationUnlocked = function(playerData, automation)
 	if not automation then
 		return false
 	end
@@ -302,9 +607,9 @@ local function selectCheapestUpgrade(branch, playerData)
 	local owned = playerData.upgrades or {}
 	local currency = typeof(playerData.data) == "number" and playerData.data or 0
 
-	local choiceId
-	local choiceCost
- local stalled = true
+        local choiceId
+        local choiceCost
+        local stalled = true
 
 	for _, upgrade in ipairs(definitions) do
 		if not UpgradeConfig.IsMaxed(owned, upgrade.id) and UpgradeConfig.MeetsRequirements(owned, upgrade.id) then
@@ -360,7 +665,7 @@ local function isAutomationEnabled(player, automationId)
 	return flag == true
 end
 
-local function anyAutomationEnabled(settings)
+anyAutomationEnabled = function(settings)
 	if typeof(settings) ~= "table" or typeof(settings.enabled) ~= "table" then
 		return false
 	end
@@ -422,10 +727,10 @@ local function tryAutomationPurchase(player, automationId, playerData)
 	return updated
 end
 
-local function processPlayerAutomation(player)
-	if isBlocked(player) then
-		return
-	end
+local function processPlayerAutomation(player, now)
+        if isBlocked(player) then
+                return
+        end
 
 	local playerData = PlayerDataService.Get(player)
 	if typeof(playerData) ~= "table" then
@@ -441,17 +746,10 @@ local function processPlayerAutomation(player)
 		playerData = tryAutomationPurchase(player, automationId, playerData)
 		if typeof(playerData) ~= "table" then
 			break
-		end
-	end
+                end
+        end
 
-	local analytics = getAnalyticsState(player)
-	if anyAutomationEnabled(settings) then
-		if not analytics.enabledStart then
-			analytics.enabledStart = now or time()
-		end
-	else
-		analytics.enabledStart = nil
-	end
+        recordEnabledTime(player, settings, now or time())
 end
 
 local function getBaseInterval(player, settings)
@@ -473,41 +771,49 @@ local function getBaseInterval(player, settings)
 end
 
 local function automationLoop()
-	RunService.Heartbeat:Connect(function()
-		local now = time()
-		for _, player in ipairs(Players:GetPlayers()) do
-			local settings = getPlayerSettings(player)
-			if settings then
-				local interval = getBaseInterval(player, settings)
-				local last = lastProcessTimes[player]
-				if not last or (now - last) >= interval then
-					lastProcessTimes[player] = now
-					processPlayerAutomation(player)
-				end
-			end
-		end
-	end)
+        RunService.Heartbeat:Connect(function()
+                local now = time()
+                for _, player in ipairs(Players:GetPlayers()) do
+                        local settings = getPlayerSettings(player)
+                        if settings then
+                                local interval = getBaseInterval(player, settings)
+                                local last = lastProcessTimes[player]
+                                if not last or (now - last) >= interval then
+                                        lastProcessTimes[player] = now
+                                        processPlayerAutomation(player, now)
+                                end
+
+                                logAutoBuySummary(player, settings, false)
+                        end
+                end
+        end)
 end
 
 local function persistSettings(player, settings)
 	PlayerDataService.Set(player, {
 		automation = cloneSettings(settings),
 	})
+	notifyPresetStateChanged(player)
 end
 
 function AutomationService.SetEnabled(player, automationId, enabled)
-	if not automationById[automationId] then
-		return false
-	end
+        if not automationById[automationId] then
+                return false
+        end
 
 	local settings = getPlayerSettings(player)
-	if not settings then
-		return false
-	end
+        if not settings then
+                return false
+        end
 
-	settings.enabled[automationId] = enabled == true
-	persistSettings(player, settings)
-	return true
+        settings.enabled[automationId] = enabled == true
+        persistSettings(player, settings)
+
+        local now = time()
+        recordEnabledTime(player, settings, now)
+        logAutoBuyToggle(player, settings)
+
+        return true
 end
 
 function AutomationService.SetPriority(player, ordered)
@@ -531,11 +837,12 @@ function AutomationService.SetPriority(player, ordered)
 		if not table.find(newOrder, automationId) then
 			table.insert(newOrder, automationId)
 		end
-	end
+        end
 
-	settings.priority = newOrder
-	persistSettings(player, settings)
-	return true
+        settings.priority = newOrder
+        persistSettings(player, settings)
+        logAutoBuyToggle(player, settings)
+        return true
 end
 
 function AutomationService.PurchaseSpeedTier(player)
@@ -583,6 +890,74 @@ function AutomationService.SetBlockingFlag(player, key, value)
 		active = value == true,
 		timestamp = time(),
 	}
+end
+
+function AutomationService.GetPresetState(player)
+	local settings = getPlayerSettings(player)
+	if not settings then
+		return nil
+	end
+
+	local playerData = PlayerDataService.Get(player)
+	return buildPresetState(player, settings, playerData)
+end
+
+function AutomationService.ApplyPreset(player, presetIndex)
+	local settings = getPlayerSettings(player)
+	if not settings then
+		return false, "uninitialized"
+	end
+
+	local clamped = clampPresetIndex(presetIndex)
+	if not clamped then
+		return false, "invalid"
+	end
+
+	local preset = settings.presets and settings.presets[clamped]
+	if not preset then
+		return false, "missing"
+	end
+
+	local playerData = PlayerDataService.Get(player)
+	local projection = projectPresetForPlayer(playerData, preset)
+	if not projection then
+		return false, "missing"
+	end
+
+	settings.enabled = table.clone(projection.enabled)
+	settings.priority = table.clone(projection.priority)
+
+	persistSettings(player, settings)
+	recordEnabledTime(player, settings, time())
+	logAutoBuyToggle(player, settings)
+
+	return true, buildPresetState(player, settings, playerData)
+end
+
+function AutomationService.SavePreset(player, presetIndex, payload)
+	local settings = getPlayerSettings(player)
+	if not settings then
+		return false, "uninitialized"
+	end
+
+	local clamped = clampPresetIndex(presetIndex)
+	if not clamped then
+		return false, "invalid"
+	end
+
+	settings.presets = settings.presets or {}
+
+	local existing = settings.presets[clamped]
+	local sanitized = sanitizePresetEntry(payload, existing, false)
+	local playerData = PlayerDataService.Get(player)
+
+	sanitized.enabled = normalizeEnabledForPlayer(sanitized.enabled, playerData)
+	sanitized.priority = normalizePriorityList(sanitized.priority)
+
+	settings.presets[clamped] = sanitized
+	persistSettings(player, settings)
+
+	return true, buildPresetState(player, settings, playerData)
 end
 
 local function buildAutomationEntries(player, settings)
@@ -641,20 +1016,28 @@ function AutomationService.Init()
 	end
 	AutomationService._initialized = true
 
-	Players.PlayerAdded:Connect(function(player)
-		playerSettingsCache[player] = nil
-		getPlayerSettings(player)
-	end)
+        Players.PlayerAdded:Connect(function(player)
+                playerSettingsCache[player] = nil
+                getPlayerSettings(player)
+                sessionStartTimes[player] = time()
+                getAnalyticsState(player)
+        end)
 
-	Players.PlayerRemoving:Connect(function(player)
-		playerSettingsCache[player] = nil
-		lastProcessTimes[player] = nil
-		blockState[player] = nil
-	end)
+        Players.PlayerRemoving:Connect(function(player)
+                logAutoBuySummary(player, getPlayerSettings(player), true)
+                playerSettingsCache[player] = nil
+                lastProcessTimes[player] = nil
+                blockState[player] = nil
+                analyticsByPlayer[player] = nil
+                sessionStartTimes[player] = nil
+        end)
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		getPlayerSettings(player)
-	end
+        for _, player in ipairs(Players:GetPlayers()) do
+                playerSettingsCache[player] = nil
+                getPlayerSettings(player)
+                sessionStartTimes[player] = time()
+                getAnalyticsState(player)
+        end
 
 	automationLoop()
 end
