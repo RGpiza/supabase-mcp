@@ -1,8 +1,6 @@
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
 
-local PlayerDataService = require(script.Parent.PlayerDataService)
-
 local GlobalStatsService = {}
 
 local DATASTORE_NAME = "GlobalStats"
@@ -12,9 +10,10 @@ local SAVE_INTERVAL = 60
 local statsStore = DataStoreService:GetDataStore(DATASTORE_NAME)
 
 local statsState = {
-	totalDataGenerated = 0,
-	totalPrestiges = 0,
+	LifetimeData = 0,
+	TotalPrestiges = 0,
 }
+local changedEvent = Instance.new("BindableEvent")
 
 local initialized = false
 local saveDirty = false
@@ -34,11 +33,11 @@ local function loadStats()
 	end)
 
 	if success and typeof(stored) == "table" then
-		statsState.totalDataGenerated = sanitizeNumber(stored.totalDataGenerated or stored.totalData)
-		statsState.totalPrestiges = sanitizeNumber(stored.totalPrestiges)
+		statsState.LifetimeData = sanitizeNumber(stored.LifetimeData or stored.totalDataGenerated or stored.totalData)
+		statsState.TotalPrestiges = sanitizeNumber(stored.TotalPrestiges or stored.totalPrestiges)
 	else
-		statsState.totalDataGenerated = 0
-		statsState.totalPrestiges = 0
+		statsState.LifetimeData = 0
+		statsState.TotalPrestiges = 0
 	end
 end
 
@@ -48,8 +47,10 @@ local function saveStats()
 	end
 
 	local payload = {
-		totalDataGenerated = statsState.totalDataGenerated,
-		totalPrestiges = statsState.totalPrestiges,
+		LifetimeData = statsState.LifetimeData,
+		TotalPrestiges = statsState.TotalPrestiges,
+		totalDataGenerated = statsState.LifetimeData,
+		totalPrestiges = statsState.TotalPrestiges,
 	}
 
 	local success, err = pcall(function()
@@ -67,22 +68,26 @@ local function applyDataDelta(delta)
 	if not delta or delta <= 0 then
 		return
 	end
-	statsState.totalDataGenerated += delta
+	statsState.LifetimeData += delta
 	saveDirty = true
+	changedEvent:Fire("data", delta, statsState.LifetimeData, statsState.TotalPrestiges)
 end
 
 local function applyPrestigeDelta(delta)
 	if not delta or delta <= 0 then
 		return
 	end
-	statsState.totalPrestiges += delta
+	statsState.TotalPrestiges += delta
 	saveDirty = true
+	changedEvent:Fire("prestige", delta, statsState.LifetimeData, statsState.TotalPrestiges)
 end
 
 function GlobalStatsService.GetStats()
 	return {
-		totalDataGenerated = statsState.totalDataGenerated,
-		totalPrestiges = statsState.totalPrestiges,
+		totalDataGenerated = statsState.LifetimeData,
+		totalPrestiges = statsState.TotalPrestiges,
+		LifetimeData = statsState.LifetimeData,
+		TotalPrestiges = statsState.TotalPrestiges,
 	}
 end
 
@@ -90,24 +95,19 @@ function GlobalStatsService.Save()
 	saveStats()
 end
 
-local function onPlayerDataChanged(player, previousState, newState)
-	if typeof(newState) ~= "table" then
-		return
-	end
+function GlobalStatsService.AddData(delta)
+	applyDataDelta(delta)
+end
 
-	local prevData = 0
-	if typeof(previousState) == "table" and typeof(previousState.data) == "number" then
-		prevData = previousState.data
-	end
-	local newData = typeof(newState.data) == "number" and newState.data or 0
-	applyDataDelta(newData - prevData)
+function GlobalStatsService.AddPrestige(delta)
+	applyPrestigeDelta(delta)
+end
 
-	local prevPrestige = 0
-	if typeof(previousState) == "table" and typeof(previousState.prestige) == "number" then
-		prevPrestige = previousState.prestige
+function GlobalStatsService.OnChanged(callback)
+	if typeof(callback) ~= "function" then
+		return { Disconnect = function() end }
 	end
-	local newPrestige = typeof(newState.prestige) == "number" and newState.prestige or 0
-	applyPrestigeDelta(newPrestige - prevPrestige)
+	return changedEvent.Event:Connect(callback)
 end
 
 function GlobalStatsService.Init()
@@ -117,8 +117,6 @@ function GlobalStatsService.Init()
 	initialized = true
 
 	loadStats()
-
-	PlayerDataService.OnAfterSet(onPlayerDataChanged)
 
 	RunService.Heartbeat:Connect(function(dt)
 		accumulatedTime += dt

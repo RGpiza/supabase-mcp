@@ -1,12 +1,13 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local AnalyticsService = game:GetService("AnalyticsService")
+local Players = game:GetService("Players")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local UpgradeService = require(script.Parent.UpgradeService)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
 local AutomationConfig = require(ReplicatedStorage.Shared.AutomationConfig)
+local AutomationConstants = require(ReplicatedStorage.Shared.AutomationConstants)
 local SessionRewardService = require(script.Parent.SessionRewardService)
 
 local AutomationService = {}
@@ -15,6 +16,7 @@ local BLOCK_TIMEOUT = 5
 local BASE_INTERVAL = 0.5
 local SUMMARY_INTERVAL = 120
 local automationById = {}
+local automationByAttribute = {}
 local isAutomationUnlocked
 local DEFAULT_PRIORITY = AutomationConfig.GetDefaultPriority()
 local maxSpeedTier = AutomationConfig.GetMaxSpeedTier()
@@ -26,6 +28,35 @@ local blockState = {}
 local analyticsByPlayer = {}
 local sessionStartTimes = {}
 local statePublisher = nil
+local autoSwitchNotices = {}
+local presetUnlockConnections = {}
+local PRESET4_ATTRIBUTE = AutomationConstants.Preset4Attribute or "HasPreset4"
+local SIMPLE_AUTO_BRANCHES = {
+	CPU = "auto_cpu",
+	RAM = "auto_ram",
+	STORAGE = "auto_storage",
+}
+local BRANCH_LOOKUP = {}
+for branch, automationId in pairs(SIMPLE_AUTO_BRANCHES) do
+	BRANCH_LOOKUP[branch] = automationId
+	BRANCH_LOOKUP[string.lower(branch)] = automationId
+end
+local autoBuyStateCache = {}
+
+local function observePresetUnlockAttribute(player)
+	if not player then
+		return
+	end
+
+	if presetUnlockConnections[player] then
+		presetUnlockConnections[player]:Disconnect()
+		presetUnlockConnections[player] = nil
+	end
+
+	presetUnlockConnections[player] = player:GetAttributeChangedSignal(PRESET4_ATTRIBUTE):Connect(function()
+		notifyPresetStateChanged(player)
+	end)
+end
 
 local function notifyPresetStateChanged(player)
 	for _, callback in ipairs(presetStateListeners) do
@@ -61,6 +92,64 @@ local BRANCH_SHORT_NAMES = {
 
 for _, definition in ipairs(AutomationConfig.GetAll()) do
 	automationById[definition.id] = definition
+	if typeof(definition.attribute) == "string" and definition.attribute ~= "" then
+		automationByAttribute[definition.attribute] = definition.id
+		automationByAttribute[string.lower(definition.attribute)] = definition.id
+	end
+end
+
+local function resolveAutomationId(identifier)
+	if typeof(identifier) ~= "string" then
+		return nil
+	end
+
+	if automationById[identifier] then
+		return identifier
+	end
+
+	local mapped = automationByAttribute[identifier]
+	if mapped then
+		return mapped
+	end
+
+	return nil
+end
+
+local function extractEnabledMap(payload)
+	if typeof(payload) ~= "table" then
+		return nil
+	end
+
+	if typeof(payload.enabled) == "table" then
+		return payload.enabled
+	end
+
+	local collected
+	for attribute, automationId in pairs(automationByAttribute) do
+		local value = payload[attribute]
+		if value ~= nil then
+			collected = collected or {}
+			collected[automationId] = value == true
+		end
+	end
+
+	return collected
+end
+
+local function extractPriorityListPayload(payload)
+	if typeof(payload) ~= "table" then
+		return nil
+	end
+
+	if typeof(payload.priority) == "table" then
+		return payload.priority
+	end
+
+	if typeof(payload.PriorityOrder) == "table" then
+		return payload.PriorityOrder
+	end
+
+	return nil
 end
 
 local function sanitizePresetEntry(payload, fallback, allowRename)
@@ -81,7 +170,7 @@ local function sanitizePresetEntry(payload, fallback, allowRename)
 		end
 	end
 
-	local enabledSource = typeof(payload) == "table" and typeof(payload.enabled) == "table" and payload.enabled or nil
+	local enabledSource = extractEnabledMap(payload)
 	if enabledSource then
 		for _, definition in ipairs(AutomationConfig.GetAll()) do
 			sanitized.enabled[definition.id] = enabledSource[definition.id] == true
@@ -95,11 +184,12 @@ local function sanitizePresetEntry(payload, fallback, allowRename)
 	end
 
 	local priorityList = {}
-	local prioritySource = typeof(payload) == "table" and typeof(payload.priority) == "table" and payload.priority or nil
+	local prioritySource = extractPriorityListPayload(payload)
 	if prioritySource then
 		for _, automationId in ipairs(prioritySource) do
-			if automationById[automationId] and not table.find(priorityList, automationId) then
-				table.insert(priorityList, automationId)
+			local resolved = resolveAutomationId(automationId)
+			if resolved and not table.find(priorityList, resolved) then
+				table.insert(priorityList, resolved)
 			end
 		end
 	
@@ -159,12 +249,22 @@ local function sanitizePresets(presets)
 	return stored
 end
 
+local function clampAutoSwitchPresetIndex(index)
+	local numeric = typeof(index) == "number" and math.floor(index + 0.5) or nil
+	if not numeric then
+		return 1
+	end
+	return math.clamp(numeric, 1, presetSlotCount)
+end
+
 local function sanitizeSettings(settings)
 	local sanitized = {
 		enabled = {},
 		priority = {},
 		speedTier = 0,
 		presets = AutomationConfig.GetDefaultPresets(),
+		autoSwitchOnPrestige = false,
+		autoSwitchPresetIndex = 1,
 	}
 
 	if typeof(settings) == "table" then
@@ -191,6 +291,15 @@ local function sanitizeSettings(settings)
 		if typeof(settings.presets) == "table" then
 			sanitized.presets = sanitizePresets(settings.presets)
 		end
+
+		if typeof(settings.autoSwitchOnPrestige) == "boolean" then
+			sanitized.autoSwitchOnPrestige = settings.autoSwitchOnPrestige
+		end
+
+		local storedIndex = clampAutoSwitchPresetIndex(settings.autoSwitchPresetIndex)
+		if storedIndex then
+			sanitized.autoSwitchPresetIndex = storedIndex
+		end
 	end
 
 	for _, automationId in ipairs(DEFAULT_PRIORITY) do
@@ -198,6 +307,8 @@ local function sanitizeSettings(settings)
 			table.insert(sanitized.priority, automationId)
 		end
 	end
+
+	sanitized.autoSwitchPresetIndex = clampAutoSwitchPresetIndex(sanitized.autoSwitchPresetIndex)
 
 	return sanitized
 end
@@ -208,6 +319,8 @@ local function cloneSettings(settings)
 		enabled = {},
 		priority = {},
 		presets = {},
+		autoSwitchOnPrestige = settings.autoSwitchOnPrestige == true,
+		autoSwitchPresetIndex = clampAutoSwitchPresetIndex(settings.autoSwitchPresetIndex),
 	}
 
 	for automationId, value in pairs(settings.enabled or {}) do
@@ -243,6 +356,26 @@ local function clampPresetIndex(index)
 		return nil
 	end
 	return numeric
+end
+
+local function isPresetUnlocked(player, presetIndex)
+	if presetIndex <= 3 then
+		return true
+	end
+
+	if presetIndex == 4 then
+		return player ~= nil and player:GetAttribute(PRESET4_ATTRIBUTE) == true
+	end
+
+	return true
+end
+
+local function getMaxUnlockedPresetIndex(player)
+	if isPresetUnlocked(player, presetSlotCount) then
+		return presetSlotCount
+	end
+
+	return 3
 end
 
 local function clonePresetForClient(preset)
@@ -342,7 +475,7 @@ local function determineActivePresetIndex(settings, playerData)
 	return nil
 end
 
-local function buildPresetState(player, settings, playerData)
+local function buildPresetState(player, settings, playerData, consumeAutoSwitchNotice)
 	if typeof(settings) ~= "table" then
 		return nil
 	end
@@ -356,11 +489,38 @@ local function buildPresetState(player, settings, playerData)
 		activePreset = determineActivePresetIndex(settings, playerData),
 	}
 
+	local autoSwitchIndex = clampAutoSwitchPresetIndex(settings.autoSwitchPresetIndex)
+	local maxUnlocked = getMaxUnlockedPresetIndex(player)
+	if autoSwitchIndex > maxUnlocked then
+		autoSwitchIndex = maxUnlocked
+	end
+	state.autoSwitch = {
+		enabled = settings.autoSwitchOnPrestige == true,
+		presetIndex = autoSwitchIndex,
+		maxPresetIndex = maxUnlocked,
+	}
+
 	for index = 1, presetSlotCount do
 		local preset = settings.presets and settings.presets[index]
 		if preset then
 			state.presets[index] = clonePresetForClient(preset)
 		end
+	end
+
+	state.presetUnlocks = {}
+	for index = 1, presetSlotCount do
+		state.presetUnlocks[index] = isPresetUnlocked(player, index)
+	end
+
+	state.maxUnlockedPresetIndex = maxUnlocked
+	state.presetGamepass = {
+		index = 4,
+		gamepassId = AutomationConstants.GamepassIdPreset4,
+	}
+
+	if consumeAutoSwitchNotice and autoSwitchNotices[player] then
+		state.autoSwitchApplied = true
+		autoSwitchNotices[player] = nil
 	end
 
 	return state
@@ -499,20 +659,14 @@ local function logAutoBuySummary(player, settings, force)
                 return
         end
 
-        local avgSpend = 0
-        if purchaseCount > 0 and totalSpent > 0 then
-                avgSpend = totalSpent / purchaseCount
-        end
-
         local payload = {
-                PurchasesCount = purchaseCount,
+                Purchases = purchaseCount,
+                LevelsGained = upgradesGained,
                 TotalSpent = totalSpent,
-                UpgradesGained = upgradesGained,
-                TimeEnabledSec = enabledTime,
+                ActiveTimeSec = enabledTime,
                 StallCount = stallCount,
                 PrestigeLevel = getPrestigeLevel(player),
                 SessionTimeSec = getSessionTime(player),
-                AvgSpendPerPurchase = avgSpend,
         }
 
         logCustomEvent(player, "AutoBuySummary", 1, payload)
@@ -543,6 +697,20 @@ local function getPlayerSettings(player)
 	local sanitized = sanitizeSettings(data.automation)
 	playerSettingsCache[player] = sanitized
 	return sanitized
+end
+
+local function buildAutoBuySnapshot(settings)
+	local snapshot = {}
+	if settings and typeof(settings.enabled) == "table" then
+		for branch, automationId in pairs(SIMPLE_AUTO_BRANCHES) do
+			snapshot[branch] = settings.enabled[automationId] == true
+		end
+	else
+		for branch in pairs(SIMPLE_AUTO_BRANCHES) do
+			snapshot[branch] = false
+		end
+	end
+	return snapshot
 end
 
 isAutomationUnlocked = function(playerData, automation)
@@ -816,6 +984,73 @@ function AutomationService.SetEnabled(player, automationId, enabled)
         return true
 end
 
+local function resolveAutoBranch(branch)
+	if typeof(branch) ~= "string" then
+		return nil, nil
+	end
+	local automationId = BRANCH_LOOKUP[string.upper(branch)] or BRANCH_LOOKUP[string.lower(branch)]
+	if not automationId then
+		return nil, nil
+	end
+	local resolvedBranch = nil
+	for name, id in pairs(SIMPLE_AUTO_BRANCHES) do
+		if id == automationId then
+			resolvedBranch = name
+			break
+		end
+	end
+	return automationId, resolvedBranch
+end
+
+function AutomationService.SetAutoBuyBranch(player, branch, enabled)
+	local automationId, resolvedBranch = resolveAutoBranch(branch)
+	if not automationId then
+		return false
+	end
+
+	local success = AutomationService.SetEnabled(player, automationId, enabled)
+	if success then
+		local settings = getPlayerSettings(player)
+		autoBuyStateCache[player] = buildAutoBuySnapshot(settings)
+	end
+	return success, resolvedBranch
+end
+
+function AutomationService.GetAutoBuyState(player)
+	local settings = getPlayerSettings(player)
+	local snapshot = buildAutoBuySnapshot(settings)
+	autoBuyStateCache[player] = snapshot
+	return table.clone(snapshot)
+end
+
+function AutomationService.DisableAllAutoBuy(player)
+	local settings = getPlayerSettings(player)
+	local hadSettings = settings and typeof(settings.enabled) == "table"
+
+	local changed = not hadSettings
+	if hadSettings then
+		for _, automationId in pairs(SIMPLE_AUTO_BRANCHES) do
+			if settings.enabled[automationId] then
+				settings.enabled[automationId] = false
+				changed = true
+			end
+		end
+	end
+
+	if changed then
+		if hadSettings then
+			persistSettings(player, settings)
+			logAutoBuyToggle(player, settings)
+		end
+	end
+
+	autoBuyStateCache[player] = buildAutoBuySnapshot(settings)
+end
+
+function AutomationService.ClearAutoBuyState(player)
+	autoBuyStateCache[player] = nil
+end
+
 function AutomationService.SetPriority(player, ordered)
 	if typeof(ordered) ~= "table" then
 		return false
@@ -843,6 +1078,47 @@ function AutomationService.SetPriority(player, ordered)
         persistSettings(player, settings)
         logAutoBuyToggle(player, settings)
         return true
+end
+
+function AutomationService.SetAutoSwitchSettings(player, enabled, presetIndex)
+	local settings = getPlayerSettings(player)
+	if not settings then
+		return false
+	end
+
+	local newIndex = clampAutoSwitchPresetIndex(presetIndex)
+	if not isPresetUnlocked(player, newIndex) then
+		newIndex = getMaxUnlockedPresetIndex(player)
+	end
+
+	settings.autoSwitchOnPrestige = enabled == true
+	settings.autoSwitchPresetIndex = newIndex
+	persistSettings(player, settings)
+
+	return true
+end
+
+function AutomationService.ApplyAutoSwitchPreset(player)
+	local settings = getPlayerSettings(player)
+	if not settings or settings.autoSwitchOnPrestige ~= true then
+		return false
+	end
+
+	local targetIndex = clampPresetIndex(settings.autoSwitchPresetIndex)
+	if not targetIndex then
+		return false
+	end
+
+	if not isPresetUnlocked(player, targetIndex) then
+		return false
+	end
+
+	autoSwitchNotices[player] = true
+	local success = AutomationService.ApplyPreset(player, targetIndex)
+	if not success then
+		autoSwitchNotices[player] = nil
+	end
+	return success
 end
 
 function AutomationService.PurchaseSpeedTier(player)
@@ -892,14 +1168,14 @@ function AutomationService.SetBlockingFlag(player, key, value)
 	}
 end
 
-function AutomationService.GetPresetState(player)
+function AutomationService.GetPresetState(player, consumeAutoSwitchNotice)
 	local settings = getPlayerSettings(player)
 	if not settings then
 		return nil
 	end
 
 	local playerData = PlayerDataService.Get(player)
-	return buildPresetState(player, settings, playerData)
+	return buildPresetState(player, settings, playerData, consumeAutoSwitchNotice == true)
 end
 
 function AutomationService.ApplyPreset(player, presetIndex)
@@ -911,6 +1187,10 @@ function AutomationService.ApplyPreset(player, presetIndex)
 	local clamped = clampPresetIndex(presetIndex)
 	if not clamped then
 		return false, "invalid"
+	end
+
+	if not isPresetUnlocked(player, clamped) then
+		return false, "locked_preset"
 	end
 
 	local preset = settings.presets and settings.presets[clamped]
@@ -931,7 +1211,7 @@ function AutomationService.ApplyPreset(player, presetIndex)
 	recordEnabledTime(player, settings, time())
 	logAutoBuyToggle(player, settings)
 
-	return true, buildPresetState(player, settings, playerData)
+	return true, buildPresetState(player, settings, playerData, false)
 end
 
 function AutomationService.SavePreset(player, presetIndex, payload)
@@ -943,6 +1223,10 @@ function AutomationService.SavePreset(player, presetIndex, payload)
 	local clamped = clampPresetIndex(presetIndex)
 	if not clamped then
 		return false, "invalid"
+	end
+
+	if not isPresetUnlocked(player, clamped) then
+		return false, "locked_preset"
 	end
 
 	settings.presets = settings.presets or {}
@@ -957,7 +1241,7 @@ function AutomationService.SavePreset(player, presetIndex, payload)
 	settings.presets[clamped] = sanitized
 	persistSettings(player, settings)
 
-	return true, buildPresetState(player, settings, playerData)
+	return true, buildPresetState(player, settings, playerData, false)
 end
 
 local function buildAutomationEntries(player, settings)
@@ -1021,6 +1305,8 @@ function AutomationService.Init()
                 getPlayerSettings(player)
                 sessionStartTimes[player] = time()
                 getAnalyticsState(player)
+                observePresetUnlockAttribute(player)
+                autoSwitchNotices[player] = nil
         end)
 
         Players.PlayerRemoving:Connect(function(player)
@@ -1030,6 +1316,12 @@ function AutomationService.Init()
                 blockState[player] = nil
                 analyticsByPlayer[player] = nil
                 sessionStartTimes[player] = nil
+                if presetUnlockConnections[player] then
+                        presetUnlockConnections[player]:Disconnect()
+                        presetUnlockConnections[player] = nil
+                end
+                autoSwitchNotices[player] = nil
+		autoBuyStateCache[player] = nil
         end)
 
         for _, player in ipairs(Players:GetPlayers()) do
@@ -1037,6 +1329,9 @@ function AutomationService.Init()
                 getPlayerSettings(player)
                 sessionStartTimes[player] = time()
                 getAnalyticsState(player)
+                observePresetUnlockAttribute(player)
+                autoSwitchNotices[player] = nil
+		autoBuyStateCache[player] = nil
         end
 
 	automationLoop()

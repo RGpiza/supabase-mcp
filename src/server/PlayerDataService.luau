@@ -15,6 +15,13 @@ local defaultData = {
 	upgrades = {},
 	prestige = 0,
 	corePower = 0,
+	weeklyData = 0,
+	lastWeeklyReset = "",
+	weeklyReward = {
+		tier = "",
+		expiresAt = 0,
+	},
+	lifetimeData = 0,
 	currency = 0,
 	boosts = {},
 	ownedPasses = {},
@@ -25,6 +32,8 @@ local defaultData = {
 		priority = AutomationConfig.GetDefaultPriority(),
 		speedTier = 0,
 		presets = AutomationConfig.GetDefaultPresets(),
+		autoSwitchOnPrestige = false,
+		autoSwitchPresetIndex = 1,
 	},
 }
 
@@ -32,6 +41,13 @@ local playerCache = {}
 local dataStore = DataStoreService:GetDataStore(DATASTORE_NAME)
 local listenersInitialized = false
 local afterSetListeners = {}
+
+local function getCurrentWeekKey()
+	local utc = os.date("!*t")
+	local dayOfYear = utc.yday or 1
+	local weekIndex = math.floor(math.max(dayOfYear - 1, 0) / 7)
+	return string.format("%04d-W%02d", utc.year, weekIndex + 1)
+end
 
 local function deepCopy(source)
 	local target = {}
@@ -135,6 +151,8 @@ local function sanitizeAutomation(payload)
 		priority = AutomationConfig.GetDefaultPriority(),
 		speedTier = 0,
 		presets = AutomationConfig.GetDefaultPresets(),
+		autoSwitchOnPrestige = false,
+		autoSwitchPresetIndex = 1,
 	}
 
 	if typeof(payload) ~= "table" then
@@ -211,6 +229,17 @@ local function sanitizeAutomation(payload)
 		end
 	end
 
+	if typeof(payload.autoSwitchOnPrestige) == "boolean" then
+		sanitized.autoSwitchOnPrestige = payload.autoSwitchOnPrestige
+	end
+
+	local presetIndex = payload.autoSwitchPresetIndex
+	if typeof(presetIndex) ~= "number" then
+		presetIndex = 1
+	end
+	presetIndex = math.clamp(math.floor(presetIndex + 0.5), 1, AutomationConfig.GetPresetSlotCount())
+	sanitized.autoSwitchPresetIndex = presetIndex
+
 	return sanitized
 end
 
@@ -239,6 +268,36 @@ local function sanitizeData(payload)
 
 	if typeof(payload.data) == "number" then
 		sanitized.data = payload.data
+	end
+
+	if typeof(payload.weeklyData) == "number" then
+		sanitized.weeklyData = math.max(payload.weeklyData, 0)
+	end
+
+	if typeof(payload.lastWeeklyReset) == "string" then
+		sanitized.lastWeeklyReset = payload.lastWeeklyReset
+	end
+
+	if typeof(payload.weeklyReward) == "table" then
+		local reward = payload.weeklyReward
+		sanitized.weeklyReward = {
+			tier = typeof(reward.tier) == "string" and reward.tier or "",
+			expiresAt = typeof(reward.expiresAt) == "number" and reward.expiresAt or 0,
+		}
+	end
+
+	local currentWeekKey = getCurrentWeekKey()
+	if sanitized.lastWeeklyReset == "" then
+		sanitized.lastWeeklyReset = currentWeekKey
+	end
+
+	if sanitized.lastWeeklyReset ~= currentWeekKey then
+		sanitized.weeklyData = 0
+		sanitized.lastWeeklyReset = currentWeekKey
+	end
+
+	if typeof(payload.lifetimeData) == "number" then
+		sanitized.lifetimeData = math.max(payload.lifetimeData, 0)
 	end
 
 	sanitized.upgrades = sanitizeUpgrades(payload.upgrades)
@@ -355,7 +414,48 @@ function PlayerDataService.Set(player, newData)
 	local userId = tostring(player.UserId)
 	local previousState = playerCache[userId]
 	local merged = deepMerge(playerCache[userId] or defaultData, newData)
-	playerCache[userId] = sanitizeData(merged)
+	local sanitized = sanitizeData(merged)
+
+	local currentWeekKey = getCurrentWeekKey()
+	if sanitized.lastWeeklyReset ~= currentWeekKey then
+		sanitized.weeklyData = 0
+		sanitized.lastWeeklyReset = currentWeekKey
+	end
+
+	local previousDataValue = 0
+	if typeof(previousState) == "table" and typeof(previousState.data) == "number" then
+		previousDataValue = previousState.data
+	end
+	local previousLifetime = 0
+	if typeof(previousState) == "table" and typeof(previousState.lifetimeData) == "number" then
+		previousLifetime = math.max(previousState.lifetimeData, 0)
+	end
+
+	local newDataValue = typeof(sanitized.data) == "number" and sanitized.data or 0
+	local lifetimeValue = typeof(sanitized.lifetimeData) == "number" and math.max(sanitized.lifetimeData, 0) or previousLifetime
+
+	local delta = newDataValue - previousDataValue
+	if delta > 0 then
+		lifetimeValue += delta
+	else
+		lifetimeValue = math.max(lifetimeValue, previousLifetime)
+	end
+
+	local previousWeekly = 0
+	if typeof(previousState) == "table" and typeof(previousState.weeklyData) == "number" then
+		previousWeekly = previousState.weeklyData
+	end
+
+	local weeklyValue = typeof(sanitized.weeklyData) == "number" and math.max(sanitized.weeklyData, 0) or previousWeekly
+	if delta > 0 then
+		weeklyValue += delta
+	else
+		weeklyValue = math.max(weeklyValue, previousWeekly)
+	end
+
+	sanitized.lifetimeData = lifetimeValue
+	sanitized.weeklyData = weeklyValue
+	playerCache[userId] = sanitized
 	dispatchAfterSet(player, previousState, playerCache[userId])
 end
 
@@ -406,13 +506,12 @@ local function setupListeners()
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)
-		PlayerDataService.Save(player)
 		PlayerDataService.Release(player)
 	end)
 
 	game:BindToClose(function()
 		for _, player in ipairs(Players:GetPlayers()) do
-			PlayerDataService.Save(player)
+			PlayerDataService.Release(player)
 		end
 	end)
 end

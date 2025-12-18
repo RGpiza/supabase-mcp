@@ -31,23 +31,31 @@ local function ensureRemote(instanceClass, name)
 end
 
 local requestSync = ensureRemote("RemoteFunction", "RequestSync")
-local buyUpgradeEvent = ensureRemote("RemoteEvent", "RequestBuyUpgrade")
+local getLeaderboard = ensureRemote("RemoteFunction", "GetLeaderboard")
+local getLifetimeLeaderboard = ensureRemote("RemoteFunction", "GetLifetimeLeaderboard")
+local purchaseUpgradeEvent = ensureRemote("RemoteEvent", "PurchaseUpgrade")
 local prestigeEvent = ensureRemote("RemoteEvent", "RequestPrestige")
 local requestPrestigePreview = ensureRemote("RemoteFunction", "RequestPrestigePreview")
 local saveStatusEvent = ensureRemote("RemoteEvent", "SaveStatus")
 local storeAnalyticsEvent = ensureRemote("RemoteEvent", "StoreAnalyticsEvent")
 local offlinePreviewEvent = ensureRemote("RemoteEvent", "OfflineEarningsPreview")
+local weeklyResetTimeFunction = ensureRemote("RemoteFunction", "GetWeeklyResetTime")
 local loadingProgressEvent = ensureRemote("RemoteEvent", "LoadingProgress")
 local prestigePreviewEvent = ensureRemote("RemoteEvent", "PrestigePreviewUpdate")
 local sessionBonusEvent = ensureRemote("RemoteEvent", "SessionBonusUpdate")
 local globalAnnouncementEvent = ensureRemote("RemoteEvent", "GlobalAnnouncement")
-local globalStatsEvent = ensureRemote("RemoteEvent", "GlobalStatsUpdate")
+local globalStatsEvent = ensureRemote("RemoteEvent", "GlobalStatsUpdated")
+local getGlobalStatsFunction = ensureRemote("RemoteFunction", "GetGlobalStats")
 local serverPowerEvent = ensureRemote("RemoteEvent", "ServerPowerUpdate")
 local systemNotificationEvent = ensureRemote("RemoteEvent", "SystemNotification")
 local autoBuyPresetApplyEvent = ensureRemote("RemoteEvent", "AutoBuyPresetApply")
 local autoBuyPresetSaveEvent = ensureRemote("RemoteEvent", "AutoBuyPresetSave")
 local autoBuyPresetStateEvent = ensureRemote("RemoteEvent", "AutoBuyPresetState")
 local requestAutoBuyPresets = ensureRemote("RemoteFunction", "RequestAutoBuyPresets")
+local autoBuyPresetUnlockPromptEvent = ensureRemote("RemoteEvent", "AutoBuyPresetUnlockPrompt")
+local autoBuyAutoSwitchSettingsEvent = ensureRemote("RemoteEvent", "AutoBuyAutoSwitchSettings")
+local setAutoBuyEvent = ensureRemote("RemoteEvent", "SetAutoBuy")
+local autoBuyStateEvent = ensureRemote("RemoteEvent", "AutoBuyState")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionService = require(script.Parent.ProductionService)
@@ -60,11 +68,14 @@ local EconomyAnalytics = require(script.Parent.EconomyAnalytics)
 local OfflineProgress = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("OfflineProgress"))
 local AnalyticsLogger = require(script.Parent.AnalyticsLogger)
 local AutomationService = require(script.Parent.AutomationService)
+local SaveScheduler = require(script.Parent.SaveScheduler)
+local LeaderboardService = require(script.Parent.LeaderboardService)
+local TitleDisplayService = require(script.Parent.TitleDisplayService)
+local DataGrantService = require(script.Parent.DataGrantService)
 
 local activePlayers = {}
 local productionLoopStarted = false
 local productionConnection
-local autosaveFlags = {}
 local storeStateByPlayer = {}
 local storePlatformByPlayer = {}
 local offlinePreviewSent = {}
@@ -77,13 +88,16 @@ local globalStatsLoopStarted = false
 local GLOBAL_STATS_BROADCAST_INTERVAL = 45
 local SERVER_POWER_PER_PLAYER = 0.005
 local SERVER_POWER_CAP = 0.05
-
-local AUTOSAVE_INTERVAL = 60
+local weeklyWinnerInfo = nil
+local weeklyWinnerShown = {}
 
 local sendSessionBonusUpdate
 local sendGlobalStats
 local sendServerPowerUpdate
 local sendSystemNotification
+
+local GLOBAL_STATS_DATA_STEP = 1_000_000
+local accumulatedGlobalStatsDelta = 0
 
 local function shallowCopy(source)
 	if typeof(source) ~= "table" then
@@ -169,7 +183,7 @@ local function trackClientReady(player)
 	end
 end
 
-local function savePlayerWithStatus(player)
+local function savePlayerWithStatus(player, force)
 	if not player then
 		return
 	end
@@ -178,7 +192,7 @@ local function savePlayerWithStatus(player)
 		saveStatusEvent:FireClient(player, "saving")
 	end
 
-	local success = PlayerDataService.Save(player)
+	local success = SaveScheduler.FlushPlayer(player, force ~= false)
 
 	if saveStatusEvent then
 		if success then
@@ -189,34 +203,6 @@ local function savePlayerWithStatus(player)
 	end
 
 	return success
-end
-
-local function startAutosave(player)
-	if autosaveFlags[player] then
-		return
-	end
-
-	autosaveFlags[player] = true
-
-	task.spawn(function()
-		while autosaveFlags[player] do
-			task.wait(AUTOSAVE_INTERVAL)
-			if not autosaveFlags[player] then
-				break
-			end
-
-			if player and player.Parent then
-				savePlayerWithStatus(player)
-			else
-				autosaveFlags[player] = nil
-				break
-			end
-		end
-	end)
-end
-
-local function stopAutosave(player)
-	autosaveFlags[player] = nil
 end
 
 PlayerDataService.OnAfterSet(function(player)
@@ -234,7 +220,10 @@ local function applyOfflineProgress(player, playerData)
 	local baseProduction = ProductionService.GetBaseDataPerSecond(player)
 	if typeof(baseProduction) ~= "number" or baseProduction <= 0 then
 		playerData.lastSeen = os.time()
-		PlayerDataService.Set(player, playerData)
+		PlayerDataService.Set(player, {
+			lastSeen = playerData.lastSeen,
+			boosts = playerData.boosts,
+		})
 		return
 	end
 
@@ -248,6 +237,7 @@ local function applyOfflineProgress(player, playerData)
 	local totalGain = gain * prestigeMultiplier
 	local totalBase = baseAmount * prestigeMultiplier
 	local totalBoosted = boostedAmount * prestigeMultiplier
+	local startingData = typeof(playerData.data) == "number" and playerData.data or 0
 
 	if totalGain > 0 then
 		sessionInfo[player] = sessionInfo[player] or {}
@@ -259,17 +249,22 @@ local function applyOfflineProgress(player, playerData)
 		}
 	end
 
+	local balanceAfter
 	if totalGain > 0 then
-		playerData.data = math.max(0, (playerData.data or 0) + totalGain)
+		local _, newBalance = DataGrantService.GrantData(player, totalGain, "OfflineEarnings")
+		balanceAfter = newBalance
 	end
 
-	PlayerDataService.Set(player, playerData)
+	PlayerDataService.Set(player, {
+		lastSeen = playerData.lastSeen,
+		boosts = playerData.boosts,
+	})
 
 	if totalGain > 0 then
 		EconomyAnalytics.LogSource(
 			player,
 			totalGain,
-			playerData.data,
+			balanceAfter or (startingData + totalGain),
 			Enum.AnalyticsEconomyTransactionType.TimedReward,
 			"OfflineEarnings",
 			{
@@ -318,15 +313,67 @@ local function sendAutoBuyPresetState(player)
 		return
 	end
 
-	local payload = AutomationService.GetPresetState(player)
+	local payload = AutomationService.GetPresetState(player, true)
 	if payload then
 		autoBuyPresetStateEvent:FireClient(player, payload)
 	end
 end
 
+local function sendAutoBuyState(player)
+	if not (autoBuyStateEvent and player) then
+		return
+	end
+
+	local state = AutomationService.GetAutoBuyState(player)
+	if state then
+		autoBuyStateEvent:FireClient(player, state)
+	end
+end
+
 AutomationService.OnPresetStateChanged(function(player)
 	sendAutoBuyPresetState(player)
+	sendAutoBuyState(player)
 end)
+
+local function broadcastWeeklyWinner(info, isFresh)
+	if not (globalAnnouncementEvent and info) then
+		return
+	end
+
+	weeklyWinnerInfo = info
+
+	local payload = {
+		type = "WeeklyWinner",
+		name = info.name,
+		value = info.value,
+		fresh = isFresh ~= false,
+	}
+
+	globalAnnouncementEvent:FireAllClients(payload)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		weeklyWinnerShown[player] = true
+	end
+end
+
+local function sendWeeklyWinnerRecap(player)
+	if not (player and player.Parent and globalAnnouncementEvent and weeklyWinnerInfo) then
+		return
+	end
+
+	if weeklyWinnerShown[player] then
+		return
+	end
+
+	weeklyWinnerShown[player] = true
+
+	globalAnnouncementEvent:FireClient(player, {
+		type = "WeeklyWinner",
+		name = weeklyWinnerInfo.name,
+		value = weeklyWinnerInfo.value,
+		fresh = false,
+	})
+end
 
 local function addPlayer(player)
 	fireLoadingProgress(player, "Loading data", 0.25)
@@ -345,20 +392,21 @@ local function addPlayer(player)
 
 	activePlayers[player] = true
 	trackClientReady(player)
-	startAutosave(player)
 	sendPrestigePreview(player, true)
 	sendSessionBonusUpdate(player)
 	sendGlobalStats(player)
 	sendServerPowerUpdate()
 	sendSystemNotification("➕ Player joined the system")
+	sendAutoBuyState(player)
+	sendWeeklyWinnerRecap(player)
 
 	fireLoadingProgress(player, "Finalizing", 1)
 end
 
 local function removePlayer(player)
 	activePlayers[player] = nil
-	stopAutosave(player)
-	savePlayerWithStatus(player)
+	savePlayerWithStatus(player, true)
+	LeaderboardService.ForceSync(player)
 	PlayerDataService.Release(player)
 	storeStateByPlayer[player] = nil
 	storePlatformByPlayer[player] = nil
@@ -366,6 +414,8 @@ local function removePlayer(player)
 	sessionInfo[player] = nil
 	prestigePreviewState[player] = nil
 	pendingPrestigePreviews[player] = nil
+	AutomationService.ClearAutoBuyState(player)
+	weeklyWinnerShown[player] = nil
 	if clientReadyConnections[player] then
 		clientReadyConnections[player]:Disconnect()
 		clientReadyConnections[player] = nil
@@ -391,6 +441,35 @@ local function logStoreAnalytics(player, eventName, payload)
 
 	if not ok then
 		warn("[GameServer] Failed to log store analytics:", err)
+	end
+end
+
+local function setupWeeklyWinnerAnnouncements()
+	if LeaderboardService.OnWeeklyWinnerAnnounced then
+		LeaderboardService.OnWeeklyWinnerAnnounced(function(info)
+			if typeof(info) ~= "table" then
+				return
+			end
+			info.name = info.name or string.format("User %d", info.userId or 0)
+			if typeof(info.value) ~= "number" then
+				info.value = 0
+			end
+			broadcastWeeklyWinner(info, true)
+		end)
+	end
+
+	if LeaderboardService.GetLatestWeeklyWinner then
+		local latest = LeaderboardService.GetLatestWeeklyWinner()
+		if typeof(latest) == "table" then
+			latest.name = latest.name or string.format("User %d", latest.userId or 0)
+			if typeof(latest.value) ~= "number" then
+				latest.value = 0
+			end
+			weeklyWinnerInfo = latest
+			for _, player in ipairs(Players:GetPlayers()) do
+				task.defer(sendWeeklyWinnerRecap, player)
+			end
+		end
 	end
 end
 
@@ -471,8 +550,9 @@ local function applyProduction(player, deltaTime)
 
 	-- Accumulate DPS using delta time so production remains smooth and frame-rate independent.
 	local added = dps * deltaTime
-	playerData.data = math.max((playerData.data or 0) + added, 0)
-	PlayerDataService.Set(player, playerData)
+	if added > 0 then
+		DataGrantService.GrantData(player, added, "Production")
+	end
 
 	return dps, added
 end
@@ -520,22 +600,57 @@ sendSystemNotification = function(message)
 	systemNotificationEvent:FireAllClients(message)
 end
 
-sendGlobalStats = function(player)
+local function buildGlobalStatsPayload(stats)
+	local statsTable = stats or GlobalStatsService.GetStats()
+	local totalData = 0
+	local totalPrestiges = 0
+
+	if typeof(statsTable) == "table" then
+		totalData = statsTable.totalDataGenerated or statsTable.LifetimeData or statsTable.totalData or 0
+		totalPrestiges = statsTable.totalPrestiges or statsTable.TotalPrestiges or 0
+	end
+
+	return {
+		totalData = totalData,
+		totalPrestiges = totalPrestiges,
+	}
+end
+
+sendGlobalStats = function(player, overrideStats)
 	if not globalStatsEvent then
 		return
 	end
 
-	local stats = GlobalStatsService.GetStats()
-	local payload = {
-		totalData = stats.totalDataGenerated or 0,
-		totalPrestiges = stats.totalPrestiges or 0,
-	}
+	local payload = buildGlobalStatsPayload(overrideStats)
 
 	if player then
 		globalStatsEvent:FireClient(player, payload)
 	else
 		globalStatsEvent:FireAllClients(payload)
 	end
+end
+
+local statsChangeConnection
+if GlobalStatsService.OnChanged then
+	statsChangeConnection = GlobalStatsService.OnChanged(function(kind, delta, lifetime, prestiges)
+		local changeType = tostring(kind or "")
+		local deltaValue = typeof(delta) == "number" and delta or 0
+		local stats = {
+			totalDataGenerated = lifetime or 0,
+			totalPrestiges = prestiges or 0,
+		}
+
+		if changeType == "data" then
+			accumulatedGlobalStatsDelta += deltaValue
+			if accumulatedGlobalStatsDelta >= GLOBAL_STATS_DATA_STEP then
+				accumulatedGlobalStatsDelta -= GLOBAL_STATS_DATA_STEP
+				sendGlobalStats(nil, stats)
+			end
+		elseif changeType == "prestige" then
+			accumulatedGlobalStatsDelta = 0
+			sendGlobalStats(nil, stats)
+		end
+	end)
 end
 
 local function startProductionLoop()
@@ -606,20 +721,55 @@ requestSync.OnServerInvoke = function(player)
 	return state
 end
 
-buyUpgradeEvent.OnServerEvent:Connect(function(player, upgradeId)
-	if not player then
-		return
+if getLeaderboard then
+	getLeaderboard.OnServerInvoke = function(player, mode)
+		return LeaderboardService.GetLeaderboard(player, mode)
 	end
+end
 
-	UpgradeService.Buy(player, upgradeId)
-end)
+if getLifetimeLeaderboard then
+	getLifetimeLeaderboard.OnServerInvoke = function(player, force)
+		return LeaderboardService.GetLifetimeLeaderboard(player, force == true)
+	end
+end
+
+if weeklyResetTimeFunction then
+	weeklyResetTimeFunction.OnServerInvoke = function(player)
+		return LeaderboardService.GetWeeklyResetInfo(player)
+	end
+end
+
+if purchaseUpgradeEvent then
+	purchaseUpgradeEvent.OnServerEvent:Connect(function(player, payload)
+		if not player or typeof(payload) ~= "table" then
+			return
+		end
+
+		local upgradeId = payload.upgradeId
+		if typeof(upgradeId) ~= "string" then
+			return
+		end
+
+		local mode = payload.mode == "max" and "max" or "single"
+		if mode == "max" then
+			UpgradeService.BuyMax(player, upgradeId)
+		else
+			UpgradeService.Buy(player, upgradeId)
+		end
+	end)
+end
 
 prestigeEvent.OnServerEvent:Connect(function(player)
 	if not player then
 		return
 	end
 
-	PrestigeService.Prestige(player)
+	local success = PrestigeService.Prestige(player)
+	if success then
+		AutomationService.ApplyAutoSwitchPreset(player)
+		AutomationService.DisableAllAutoBuy(player)
+		sendAutoBuyState(player)
+	end
 end)
 
 requestPrestigePreview.OnServerInvoke = function(player)
@@ -638,9 +788,15 @@ if autoBuyPresetApplyEvent then
 			return
 		end
 
-		local success = AutomationService.ApplyPreset(player, presetIndex)
+		local success, result = AutomationService.ApplyPreset(player, presetIndex)
 		if not success then
-			sendAutoBuyPresetState(player)
+			if result == "locked_preset" then
+				if autoBuyPresetUnlockPromptEvent then
+					autoBuyPresetUnlockPromptEvent:FireClient(player)
+				end
+			else
+				sendAutoBuyPresetState(player)
+			end
 		end
 	end)
 end
@@ -651,11 +807,48 @@ if autoBuyPresetSaveEvent then
 			return
 		end
 
-		local success = AutomationService.SavePreset(player, presetIndex, payload)
+		local success, result = AutomationService.SavePreset(player, presetIndex, payload)
 		if not success then
-			sendAutoBuyPresetState(player)
+			if result == "locked_preset" then
+				if autoBuyPresetUnlockPromptEvent then
+					autoBuyPresetUnlockPromptEvent:FireClient(player)
+				end
+			else
+				sendAutoBuyPresetState(player)
+			end
 		end
 	end)
+end
+
+if autoBuyAutoSwitchSettingsEvent then
+	autoBuyAutoSwitchSettingsEvent.OnServerEvent:Connect(function(player, enabled, presetIndex)
+		if not player then
+			return
+		end
+
+		AutomationService.SetAutoSwitchSettings(player, enabled, presetIndex)
+	end)
+end
+
+if setAutoBuyEvent then
+	setAutoBuyEvent.OnServerEvent:Connect(function(player, payload)
+		if not player or typeof(payload) ~= "table" then
+			return
+		end
+
+		local branch = payload.upgradeType or payload.branch
+		local enabled = payload.enabled == true
+		local success = AutomationService.SetAutoBuyBranch(player, branch, enabled)
+		if success then
+			sendAutoBuyState(player)
+		end
+	end)
+end
+
+if getGlobalStatsFunction then
+	getGlobalStatsFunction.OnServerInvoke = function()
+		return buildGlobalStatsPayload()
+	end
 end
 
 local function onPlayerRemoving(player)
@@ -687,6 +880,9 @@ for _, player in Players:GetPlayers() do
 end
 
 AutomationService.Init()
+LeaderboardService.Init()
+setupWeeklyWinnerAnnouncements()
+TitleDisplayService.Init()
 startProductionLoop()
 startSessionBonusLoop()
 startGlobalStatsLoop()
@@ -694,9 +890,8 @@ GlobalAnnouncementService.Init(globalAnnouncementEvent)
 
 game:BindToClose(function()
 	for _, player in Players:GetPlayers() do
-		savePlayerWithStatus(player)
+		savePlayerWithStatus(player, true)
 		PlayerDataService.Release(player)
 	end
 	GlobalStatsService.Save()
 end)
-
