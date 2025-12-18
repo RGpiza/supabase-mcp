@@ -4,5 +4,9 @@
     ,
   "files.associations": {
     "*": "lua"
-  }
+  },
+  "genieai.enableConversationHistory": true,
+  "genieai.openai.organization": "",
+  "vscode-ollama.model": "devstral-small-2:24b",
+  "vscode-ollama.baseUrl": "http://192,168.50.182:11434"
 }
