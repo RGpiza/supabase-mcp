@@ -28,6 +28,7 @@ function PurchaseHandlerBinder.Init(context)
 	end
 	ctx._resolvedRemotes = ctx._resolvedRemotes or {}
 	local required = { "PurchaseUpgrade", "BuyMax", "AutoBuy" }
+	local optional = { "SomeOptionalRemote" } -- Define optional remotes here
 	local missingAny = false
 	for _, name in ipairs(required) do
 		local found = remotes and remotes:FindFirstChild(name)
@@ -38,7 +39,15 @@ function PurchaseHandlerBinder.Init(context)
 		end
 	end
 	if missingAny then
-		warn("[PurchaseHandlerBinder] Some remotes missing; binder will operate defensively")
+		warn("[PurchaseHandlerBinder] Some required remotes are missing; binder will operate defensively")
+	end
+
+	-- Only warn about missing optional remotes, do not stop initialization
+	for _, name in ipairs(optional) do
+		local found = remotes and remotes:FindFirstChild(name)
+		if not found then
+			warn("[PurchaseHandlerBinder] Optional remote " .. name .. " is missing")
+		end
 	end
 end
 

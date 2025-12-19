@@ -47,6 +47,19 @@ local FRIEND_CACHE_TTL = 60
 local VALUE_CACHE_TTL = 120
 local UPLOAD_INTERVAL = 45
 local UPLOAD_POLL_INTERVAL = 10
+requestSync.OnServerInvoke = function(player)
+    local success, result = pcall(function()
+        -- Existing code
+    end)
+
+    if not success then
+        warn("RequestSync error:", result)
+        return DEFAULT_PAYLOAD
+    end
+
+    return result or DEFAULT_PAYLOAD
+end
+
 local WEEK_SECONDS = 7 * 24 * 3600
 local STORE_SCALE = 100
 
