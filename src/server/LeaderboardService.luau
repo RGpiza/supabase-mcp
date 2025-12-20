@@ -47,6 +47,18 @@ local FRIEND_CACHE_TTL = 60
 local VALUE_CACHE_TTL = 120
 local UPLOAD_INTERVAL = 45
 local UPLOAD_POLL_INTERVAL = 10
+requestSync.OnServerInvoke = function(player)
+    local success, result = pcall(function()
+        -- Existing code
+    end)
+
+    if not success then
+        warn("RequestSync error:", result)
+        return DEFAULT_PAYLOAD
+    end
+
+    return result or DEFAULT_PAYLOAD
+end
 
 local WEEK_SECONDS = 7 * 24 * 3600
 local STORE_SCALE = 100
@@ -80,7 +92,6 @@ local latestWeeklyWinnerInfo = nil
 local weeklyWinnerListeners = {}
 local cacheLoopActive = false
 local CACHE_REFRESH_INTERVAL = 60
-local warnedMissingFunctions = {}
 
 local function getCurrentWeekInfo()
 	local utc = os.date("!*t")
@@ -248,8 +259,7 @@ local function trackPlayerValue(player, newState)
 		snapshot.lifetimeValue = math.floor(math.max(newState.lifetimeData or 0, 0) * STORE_SCALE) / STORE_SCALE
 	end
 	if typeof(newState.weeklyData) == "number" then
-		snapshot.weeklyValue = math.floor(math.max(newState.weeklyData or 0, 0) * STORE_SCALE) / STORE_SCALE
-	end
+		snapshot.weeklyValue = math.floor(math.max(newState.weeklyData or 0, 0) * STORE_SCALE) / STORE_SCALE	end
 	uploadQueue[player.UserId] = true
 end
 
@@ -757,30 +767,6 @@ local function buildWeeklyPayload(player)
 	}
 end
 
-local function buildDefaultPayload(player)
-	return {
-		top = {},
-		you = {
-			name = player and (player.DisplayName or player.Name) or "You",
-			value = 0,
-			rank = nil,
-		},
-	}
-end
-
-local function buildDefaultWeeklyPayload(player)
-	local payload = buildDefaultPayload(player)
-	payload.resetSeconds = 0
-	return payload
-end
-
-local function ensurePayload(payload, fallback)
-	if type(payload) == "table" then
-		return payload
-	end
-	return fallback
-end
-
 local function claimPendingRewards(player)
 	if not player then
 		return
@@ -823,24 +809,17 @@ local function claimPendingRewards(player)
 end
 
 function LeaderboardService.GetLeaderboard(player, mode)
-	local payload
 	if mode == "friends" then
-		payload = buildFriendPayload(player)
+		return buildFriendPayload(player)
 	elseif mode == "weekly" then
-		payload = buildWeeklyPayload(player)
+		return buildWeeklyPayload(player)
 	else
-		payload = getLifetimePayload(player, false)
+		return getLifetimePayload(player, false)
 	end
-
-	if mode == "weekly" then
-		return ensurePayload(payload, buildDefaultWeeklyPayload(player))
-	end
-
-	return ensurePayload(payload, buildDefaultPayload(player))
 end
 
 function LeaderboardService.GetLifetimeLeaderboard(player, force)
-	return ensurePayload(getLifetimePayload(player, force == true), buildDefaultPayload(player))
+	return getLifetimePayload(player, force == true)
 end
 
 function LeaderboardService.GetWeeklyResetInfo(player)
@@ -876,14 +855,6 @@ function LeaderboardService.GetLatestWeeklyWinner()
 		return table.clone(latestWeeklyWinnerInfo)
 	end
 	return nil
-end
-
-function LeaderboardService.GetLeaderboards(player)
-	return {
-		lifetime = ensurePayload(getLifetimePayload(player, false), buildDefaultPayload(player)),
-		weekly = ensurePayload(buildWeeklyPayload(player), buildDefaultWeeklyPayload(player)),
-		friends = ensurePayload(buildFriendPayload(player), buildDefaultPayload(player)),
-	}
 end
 
 function LeaderboardService.OnWeeklyWinnerAnnounced(callback)
@@ -980,23 +951,14 @@ function LeaderboardService.Init()
 
 		local function bindFunction(name, fn)
 			local inst = remotes:FindFirstChild(name)
-			if not (inst and inst:IsA("RemoteFunction")) then
-				if not warnedMissingFunctions[name] then
-					warnedMissingFunctions[name] = true
-					warn("[LeaderboardService] RemoteFunction missing:", name)
-				end
-				return
-			end
-
-			inst.OnServerInvoke = function(player, ...)
-				local ok, result = pcall(fn, player, ...)
-				if ok then
-					if type(result) == "table" then
+			if inst and inst.ClassName == "RemoteFunction" then
+				inst.OnServerInvoke = function(player, ...)
+					local ok, result = pcall(fn, player, ...)
+					if ok then
 						return result
 					end
-					return {}
+					return nil
 				end
-				return {}
 			end
 		end
 
@@ -1012,6 +974,10 @@ function LeaderboardService.Init()
 			return LeaderboardService.GetWeeklyResetInfo(player)
 		end)
 
+		bindFunction("RequestSync", function(player)
+			LeaderboardService.ForceSync(player)
+			return true
+		end)
 	end
 
 	local ok, remotes = pcall(function()
@@ -1022,9 +988,10 @@ function LeaderboardService.Init()
 	else
 		-- retry once shortly after startup in case EnsureRemotes runs later
 		task.spawn(function()
-			task.wait(1)
-			local folder = ReplicatedStorage:FindFirstChild("Remotes")
-			if folder then
+			local success, folder = pcall(function()
+				return ReplicatedStorage:WaitForChild("Remotes", 5)
+			end)
+			if success and folder then
 				doBind(folder)
 			end
 		end)

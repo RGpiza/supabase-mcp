@@ -31,7 +31,7 @@ local loadingProgressEvent = safeGetRemote("LoadingProgress")
 local prestigePreviewEvent = safeGetRemote("PrestigePreviewUpdate")
 local sessionBonusEvent = safeGetRemote("SessionBonusUpdate")
 local globalAnnouncementEvent = safeGetRemote("GlobalAnnouncement")
-local globalStatsEvent = safeGetRemote("GlobalStatsUpdate")
+local globalStatsEvent = safeGetRemote("GlobalStatsUpdated")
 local getGlobalStatsFunction = safeGetRemote("GetGlobalStats")
 local serverPowerEvent = safeGetRemote("ServerPowerUpdate")
 local systemNotificationEvent = safeGetRemote("SystemNotification")
@@ -52,16 +52,7 @@ local SessionRewardService = require(script.Parent.SessionRewardService)
 local GlobalAnnouncementService = require(script.Parent.GlobalAnnouncementService)
 local GlobalStatsService = require(script.Parent.GlobalStatsService)
 local EconomyAnalytics = require(script.Parent.EconomyAnalytics)
-local OfflineProgress
-do
-	local sharedFolder = ReplicatedStorage:FindFirstChild("Shared")
-	local offlineProgressModule = sharedFolder and sharedFolder:FindFirstChild("OfflineProgress")
-	if offlineProgressModule then
-		OfflineProgress = require(offlineProgressModule)
-	else
-		warn("[GameServer] OfflineProgress module not found - offline earnings disabled.")
-	end
-end
+local OfflineProgress = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("OfflineProgress"))
 local AnalyticsLogger = require(script.Parent.AnalyticsLogger)
 local AutomationService = require(script.Parent.AutomationService)
 local SaveScheduler = require(script.Parent.SaveScheduler)
@@ -212,9 +203,6 @@ local function applyOfflineProgress(player, playerData)
 	if typeof(playerData) ~= "table" then
 		return
 	end
-	if not OfflineProgress then
-		return
-	end
 
 	local baseProduction = ProductionService.GetBaseDataPerSecond(player)
 	if typeof(baseProduction) ~= "number" or baseProduction <= 0 then
@@ -233,28 +221,10 @@ local function applyOfflineProgress(player, playerData)
 	local prestigeLevel = typeof(playerData.prestige) == "number" and math.max(playerData.prestige, 0) or 0
 	local prestigeMultiplier = 1 + (prestigeLevel * PRESTIGE_OFFLINE_STEP)
 
-	gain = typeof(gain) == "number" and gain or 0
-	baseAmount = typeof(baseAmount) == "number" and baseAmount or 0
-	boostedAmount = typeof(boostedAmount) == "number" and boostedAmount or 0
-	if typeof(prestigeMultiplier) ~= "number" then
-		prestigeMultiplier = 1
-	end
-	if typeof(timeAway) ~= "number" or timeAway < 0 then
-		timeAway = 0
-	end
-
 	local totalGain = gain * prestigeMultiplier
 	local totalBase = baseAmount * prestigeMultiplier
 	local totalBoosted = boostedAmount * prestigeMultiplier
 	local startingData = typeof(playerData.data) == "number" and playerData.data or 0
-
-	if totalGain <= 0 then
-		PlayerDataService.Set(player, {
-			lastSeen = playerData.lastSeen,
-			boosts = playerData.boosts,
-		})
-		return
-	end
 
 	if totalGain > 0 then
 		sessionInfo[player] = sessionInfo[player] or {}
@@ -490,45 +460,43 @@ local function setupWeeklyWinnerAnnouncements()
 	end
 end
 
-if storeAnalyticsEvent and storeAnalyticsEvent:IsA("RemoteEvent") then
-	storeAnalyticsEvent.OnServerEvent:Connect(function(player, payload)
-		if typeof(payload) ~= "table" then
+storeAnalyticsEvent.OnServerEvent:Connect(function(player, payload)
+	if typeof(payload) ~= "table" then
+		return
+	end
+
+	local eventName = payload.Event
+	if typeof(eventName) ~= "string" or not validStoreEventTypes[eventName] then
+		return
+	end
+
+	local platform = typeof(payload.Platform) == "string" and payload.Platform or nil
+	if platform then
+		storePlatformByPlayer[player] = platform
+		player:SetAttribute("StorePlatform", platform)
+	end
+
+	if eventName == "StoreOpened" then
+		if storeStateByPlayer[player] then
 			return
 		end
-
-		local eventName = payload.Event
-		if typeof(eventName) ~= "string" or not validStoreEventTypes[eventName] then
+		storeStateByPlayer[player] = true
+	elseif eventName == "StoreClosed" then
+		if storeStateByPlayer[player] == false then
 			return
 		end
+		storeStateByPlayer[player] = false
+	end
 
-		local platform = typeof(payload.Platform) == "string" and payload.Platform or nil
-		if platform then
-			storePlatformByPlayer[player] = platform
-			player:SetAttribute("StorePlatform", platform)
-		end
+	local data = {
+		ItemName = tostring(payload.ItemName or ""),
+		ProductType = tostring(payload.ProductType or ""),
+		ProductId = typeof(payload.ProductId) == "number" and payload.ProductId or 0,
+		Platform = storePlatformByPlayer[player] or "Unknown",
+	}
 
-		if eventName == "StoreOpened" then
-			if storeStateByPlayer[player] then
-				return
-			end
-			storeStateByPlayer[player] = true
-		elseif eventName == "StoreClosed" then
-			if storeStateByPlayer[player] == false then
-				return
-			end
-			storeStateByPlayer[player] = false
-		end
-
-		local data = {
-			ItemName = tostring(payload.ItemName or ""),
-			ProductType = tostring(payload.ProductType or ""),
-			ProductId = typeof(payload.ProductId) == "number" and payload.ProductId or 0,
-			Platform = storePlatformByPlayer[player] or "Unknown",
-		}
-
-		logStoreAnalytics(player, "Store" .. eventName, data)
-	end)
-end
+	logStoreAnalytics(player, "Store" .. eventName, data)
+end)
 
 local function getActivePlayerCount()
 	local count = 0
@@ -727,39 +695,50 @@ local function startGlobalStatsLoop()
 	end)
 end
 
--- RequestSync is handled by RequestSyncHandler; avoid assigning here to prevent conflicts.
+if requestSync then
+	requestSync.OnServerInvoke = function(player)
+		local data = PlayerDataService.Get(player)
+		if typeof(data) ~= "table" then
+			return {
+				data = {},
+				stats = {},
+				boosts = {},
+				autobuy = {},
+				store = { ready = false, items = {} },
+				leaderboards = { lifetime = {}, weekly = {}, friends = {} },
+				meta = { serverTime = os.time(), version = "1.0" }
+			}
+		end
 
-if getLeaderboard and getLeaderboard:IsA("RemoteFunction") then
+		local state = table.clone(data)
+		local dps = ProductionService.GetDataPerSecond(player)
+		state.dps = typeof(dps) == "number" and dps or 0
+
+	return state
+	end
+else
+	warn("[GameServer] RequestSync remote not found - OnServerInvoke not assigned.")
+end
+
+if getLeaderboard then
 	getLeaderboard.OnServerInvoke = function(player, mode)
-		local result = LeaderboardService.GetLeaderboard(player, mode)
-		if typeof(result) == "table" then
-			return result
-		end
-		return {}
+		return LeaderboardService.GetLeaderboard(player, mode)
 	end
 end
 
-if getLifetimeLeaderboard and getLifetimeLeaderboard:IsA("RemoteFunction") then
+if getLifetimeLeaderboard then
 	getLifetimeLeaderboard.OnServerInvoke = function(player, force)
-		local result = LeaderboardService.GetLifetimeLeaderboard(player, force == true)
-		if typeof(result) == "table" then
-			return result
-		end
-		return {}
+		return LeaderboardService.GetLifetimeLeaderboard(player, force == true)
 	end
 end
 
-if weeklyResetTimeFunction and weeklyResetTimeFunction:IsA("RemoteFunction") then
+if weeklyResetTimeFunction then
 	weeklyResetTimeFunction.OnServerInvoke = function(player)
-		local result = LeaderboardService.GetWeeklyResetInfo(player)
-		if typeof(result) == "table" then
-			return result
-		end
-		return {}
+		return LeaderboardService.GetWeeklyResetInfo(player)
 	end
 end
 
-if purchaseUpgradeEvent and purchaseUpgradeEvent:IsA("RemoteEvent") then
+if purchaseUpgradeEvent then
 	purchaseUpgradeEvent.OnServerEvent:Connect(function(player, payload)
 		if not player or typeof(payload) ~= "table" then
 			return
@@ -779,42 +758,30 @@ if purchaseUpgradeEvent and purchaseUpgradeEvent:IsA("RemoteEvent") then
 	end)
 end
 
-if prestigeEvent and prestigeEvent:IsA("RemoteEvent") then
-	prestigeEvent.OnServerEvent:Connect(function(player)
-		if not player then
-			return
-		end
-
-		local success = PrestigeService.Prestige(player)
-		if success then
-			AutomationService.ApplyAutoSwitchPreset(player)
-			AutomationService.DisableAllAutoBuy(player)
-			sendAutoBuyState(player)
-		end
-	end)
-end
-
-if requestPrestigePreview and requestPrestigePreview:IsA("RemoteFunction") then
-	requestPrestigePreview.OnServerInvoke = function(player)
-		local result = PrestigeService.GetPreview(player)
-		if typeof(result) == "table" then
-			return result
-		end
-		return {}
+prestigeEvent.OnServerEvent:Connect(function(player)
+	if not player then
+		return
 	end
+
+	local success = PrestigeService.Prestige(player)
+	if success then
+		AutomationService.ApplyAutoSwitchPreset(player)
+		AutomationService.DisableAllAutoBuy(player)
+		sendAutoBuyState(player)
+	end
+end)
+
+requestPrestigePreview.OnServerInvoke = function(player)
+	return PrestigeService.GetPreview(player)
 end
 
-if requestAutoBuyPresets and requestAutoBuyPresets:IsA("RemoteFunction") then
+if requestAutoBuyPresets then
 	requestAutoBuyPresets.OnServerInvoke = function(player)
-		local result = AutomationService.GetPresetState(player)
-		if typeof(result) == "table" then
-			return result
-		end
-		return {}
+		return AutomationService.GetPresetState(player)
 	end
 end
 
-if autoBuyPresetApplyEvent and autoBuyPresetApplyEvent:IsA("RemoteEvent") then
+if autoBuyPresetApplyEvent then
 	autoBuyPresetApplyEvent.OnServerEvent:Connect(function(player, presetIndex)
 		if not player then
 			return
@@ -833,7 +800,7 @@ if autoBuyPresetApplyEvent and autoBuyPresetApplyEvent:IsA("RemoteEvent") then
 	end)
 end
 
-if autoBuyPresetSaveEvent and autoBuyPresetSaveEvent:IsA("RemoteEvent") then
+if autoBuyPresetSaveEvent then
 	autoBuyPresetSaveEvent.OnServerEvent:Connect(function(player, presetIndex, payload)
 		if not player then
 			return
@@ -852,7 +819,7 @@ if autoBuyPresetSaveEvent and autoBuyPresetSaveEvent:IsA("RemoteEvent") then
 	end)
 end
 
-if autoBuyAutoSwitchSettingsEvent and autoBuyAutoSwitchSettingsEvent:IsA("RemoteEvent") then
+if autoBuyAutoSwitchSettingsEvent then
 	autoBuyAutoSwitchSettingsEvent.OnServerEvent:Connect(function(player, enabled, presetIndex)
 		if not player then
 			return
@@ -862,7 +829,7 @@ if autoBuyAutoSwitchSettingsEvent and autoBuyAutoSwitchSettingsEvent:IsA("Remote
 	end)
 end
 
-if setAutoBuyEvent and setAutoBuyEvent:IsA("RemoteEvent") then
+if setAutoBuyEvent then
 	setAutoBuyEvent.OnServerEvent:Connect(function(player, payload)
 		if not player or typeof(payload) ~= "table" then
 			return
@@ -877,13 +844,9 @@ if setAutoBuyEvent and setAutoBuyEvent:IsA("RemoteEvent") then
 	end)
 end
 
-if getGlobalStatsFunction and getGlobalStatsFunction:IsA("RemoteFunction") then
+if getGlobalStatsFunction then
 	getGlobalStatsFunction.OnServerInvoke = function()
-		local result = buildGlobalStatsPayload()
-		if typeof(result) == "table" then
-			return result
-		end
-		return {}
+		return buildGlobalStatsPayload()
 	end
 end
 

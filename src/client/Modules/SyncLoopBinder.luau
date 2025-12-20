@@ -4,15 +4,12 @@ local ctx = nil
 local loopActive = false
 local missingAttempts = 0
 local syncLoopWarningIssued = false
-local retryBackoff = 0.5
-local retryBackoffMax = 5
 
 function SyncLoopBinder.Init(context)
 	ctx = context or {}
 	loopActive = false
 	missingAttempts = 0
 	syncLoopWarningIssued = false
-	retryBackoff = 0.5
 end
 
 function SyncLoopBinder.Start()
@@ -32,23 +29,24 @@ function SyncLoopBinder.Start()
 			end
 
 			if not ok then
+				-- try to resolve once via optional resolveRequestSync
 				if ctx.resolveRequestSync and type(ctx.resolveRequestSync) == "function" then
 					pcall(ctx.resolveRequestSync)
 				end
 				missingAttempts = missingAttempts + 1
-				if not syncLoopWarningIssued then
-					syncLoopWarningIssued = true
-					if ctx.warn then
-						ctx.warn("[TerminalClient] RequestSync missing, retrying")
-					else
-						warn("[TerminalClient] RequestSync missing, retrying")
+				if missingAttempts > 1 then
+					if not syncLoopWarningIssued then
+						syncLoopWarningIssued = true
+						if ctx.warn then
+							ctx.warn("[TerminalClient] RequestSync missing, stopping poll loop")
+						else
+							warn("[TerminalClient] RequestSync missing, stopping poll loop")
+						end
 					end
+					break
 				end
-				task.wait(retryBackoff)
-				retryBackoff = math.min(retryBackoff * 2, retryBackoffMax)
 			else
 				missingAttempts = 0
-				retryBackoff = 0.5
 			end
 		end
 		loopActive = false
