@@ -169,8 +169,17 @@ local function initSection(config)
 	end
 
 	local function applyLeaderboard(payload)
-		local entries = typeof(payload.top) == "table" and payload.top or {}
-		local you = typeof(payload.you) == "table" and payload.you or {}
+		local entries = {}
+		if typeof(payload) == "table" then
+			if typeof(payload.top) == "table" then
+				entries = payload.top
+			elseif typeof(payload.entries) == "table" then
+				entries = payload.entries
+			elseif payload[1] ~= nil then
+				entries = payload
+			end
+		end
+		local you = typeof(payload) == "table" and (typeof(payload.you) == "table" and payload.you or {}) or {}
 
 		local signature = computeSignature(entries)
 		local rowsChanged = (state.lastTopSignature ~= signature)
@@ -329,13 +338,14 @@ function LeaderboardClient.Init(context)
 
 	for _, section in ipairs(sections) do
 		if section.page and section.remote then
-			section.list = section.page:FindFirstChild("List")
-			section.rowTemplate = section.list and section.list:FindFirstChild("RowTemplate")
-			section.emptyLabel = section.list and section.list:FindFirstChild("Empty")
-			section.yourRankFrame = section.page:FindFirstChild("YourRank")
-			section.subtitleLabel = section.page:FindFirstChild("Subtitle")
-			section.headerLabel = section.page:FindFirstChild("Header")
-			section.countdownLabel = section.page:FindFirstChild("Countdown")
+			section.list = section.page:FindFirstChild("List", true)
+				or section.page:FindFirstChildWhichIsA("ScrollingFrame", true)
+			section.rowTemplate = section.list and section.list:FindFirstChild("RowTemplate", true)
+			section.emptyLabel = section.list and section.list:FindFirstChild("Empty", true)
+			section.yourRankFrame = section.page:FindFirstChild("YourRank", true)
+			section.subtitleLabel = section.page:FindFirstChild("Subtitle", true)
+			section.headerLabel = section.page:FindFirstChild("Header", true)
+			section.countdownLabel = section.page:FindFirstChild("Countdown", true)
 			section.defaultName = player and (player.DisplayName or player.Name) or "You"
 			initSection(section)
 		end

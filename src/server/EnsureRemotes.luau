@@ -8,6 +8,7 @@ local expected = {
 	StoreAnalyticsEvent = "RemoteEvent",
 	BoostsUpdated = "RemoteEvent",
 	OfflineEarningsPreview = "RemoteEvent",
+	SaveStatus = "RemoteEvent",
 	PurchaseUpgrade = "RemoteEvent",
 	RequestPrestige = "RemoteEvent",
 	PrestigePreviewUpdate = "RemoteEvent",
@@ -30,6 +31,7 @@ local expected = {
 	GetLeaderboard = "RemoteFunction",
 	GetLifetimeLeaderboard = "RemoteFunction",
 	GetWeeklyResetTime = "RemoteFunction",
+	GetGlobalStats = "RemoteFunction",
 	RequestSync = "RemoteFunction",
 }
 

@@ -37,19 +37,6 @@ local defaultData = {
 	},
 }
 
-requestSync.OnServerInvoke = function(player)
-    local success, result = pcall(function()
-        -- Existing code
-    end)
-
-    if not success then
-        warn("RequestSync error:", result)
-        return DEFAULT_PAYLOAD
-    end
-
-    return result or DEFAULT_PAYLOAD
-end
-
 local playerCache = {}
 local dataStore = DataStoreService:GetDataStore(DATASTORE_NAME)
 local listenersInitialized = false

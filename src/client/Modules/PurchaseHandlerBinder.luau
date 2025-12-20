@@ -3,6 +3,12 @@ local PurchaseHandlerBinder = {}
 local ctx = nil
 local bindings = {} -- map button -> state table
 local connections = {} -- map button -> list of connections
+local remotesValidated = false
+local cachedMissingRequired = false
+local cachedMissingOptional = {}
+local cachedResolvedRemotes = {}
+local warnedMissingRequired = false
+local warnedMissingOptional = {}
 
 local function safeDisconnectList(list)
 	if not list then return end
@@ -27,28 +33,38 @@ function PurchaseHandlerBinder.Init(context)
 		remotes = ok and rs and rs:FindFirstChild("Remotes") or nil
 	end
 	ctx._resolvedRemotes = ctx._resolvedRemotes or {}
-	local required = { "PurchaseUpgrade", "BuyMax", "AutoBuy" }
-	local optional = { "SomeOptionalRemote" } -- Define optional remotes here
-	local missingAny = false
-	for _, name in ipairs(required) do
-		local found = remotes and remotes:FindFirstChild(name)
-		if found then
-			ctx._resolvedRemotes[name] = found
-		else
-			missingAny = true
+	local required = { "PurchaseUpgrade" }
+	local optional = {} -- Define optional remotes here
+
+	if not remotesValidated then
+		local missingAny = false
+		for _, name in ipairs(required) do
+			local found = remotes and remotes:FindFirstChild(name)
+			if found then
+				cachedResolvedRemotes[name] = found
+			else
+				missingAny = true
+			end
 		end
-	end
-	if missingAny then
-		warn("[PurchaseHandlerBinder] Some required remotes are missing; binder will operate defensively")
+		cachedMissingRequired = missingAny
+
+		for _, name in ipairs(optional) do
+			local found = remotes and remotes:FindFirstChild(name)
+			if found then
+				cachedResolvedRemotes[name] = found
+			else
+				cachedMissingOptional[name] = true
+			end
+		end
+
+		remotesValidated = true
 	end
 
-	-- Only warn about missing optional remotes, do not stop initialization
-	for _, name in ipairs(optional) do
-		local found = remotes and remotes:FindFirstChild(name)
-		if not found then
-			warn("[PurchaseHandlerBinder] Optional remote " .. name .. " is missing")
-		end
+	for name, remote in pairs(cachedResolvedRemotes) do
+		ctx._resolvedRemotes[name] = remote
 	end
+
+	-- Defer warnings until a purchase action is attempted.
 end
 
 function PurchaseHandlerBinder.Attach(storeUI, remotes)
@@ -59,6 +75,10 @@ end
 
 local function handleBuy(upgradeId)
 	if not ctx or not ctx.purchaseUpgradeEvent then
+		if cachedMissingRequired and not warnedMissingRequired then
+			warn("[PurchaseHandlerBinder] Some required remotes are missing; binder will operate defensively")
+			warnedMissingRequired = true
+		end
 		return
 	end
 	local now = os.clock()
@@ -112,13 +132,13 @@ function PurchaseHandlerBinder.Bind(button, upgradeId)
 			end
 			if ctx and ctx.triggerHaptic then pcall(ctx.triggerHaptic, "medium") end
 			if ctx and ctx.syncState then task.defer(function() pcall(ctx.syncState) end) end
-		else
-			handleBuy(upgradeId)
+			else
+				handleBuy(upgradeId)
+			end
+			if suppressActivation then
+				markHandled()
+			end
 		end
-		if suppressActivation then
-			markHandled()
-		end
-	end
 
 	local conList = {}
 
@@ -126,13 +146,8 @@ function PurchaseHandlerBinder.Bind(button, upgradeId)
 		if input.UserInputType == Enum.UserInputType.MouseButton2 then
 			firePurchase("max", true)
 		elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
-			local isShift = false
-			if input and typeof(input.IsModifierKeyDown) == "function" then
-				isShift = input:IsModifierKeyDown(Enum.KeyCode.LeftShift) or input:IsModifierKeyDown(Enum.KeyCode.RightShift)
-			else
-				local uis = game:GetService("UserInputService")
-				isShift = uis:IsKeyDown(Enum.KeyCode.LeftShift) or uis:IsKeyDown(Enum.KeyCode.RightShift)
-			end
+			local uis = game:GetService("UserInputService")
+			local isShift = uis:IsKeyDown(Enum.KeyCode.LeftShift) or uis:IsKeyDown(Enum.KeyCode.RightShift)
 			if isShift then
 				firePurchase("max", true)
 			else

@@ -11,6 +11,7 @@ local AutomationConstants = require(ReplicatedStorage:WaitForChild("Shared"):Wai
 local STORE_DATASTORE_NAME = "StoreService_PlayerData_V1"
 local MAX_RETRIES = 5
 local RETRY_DELAY = 2
+local SAVE_COOLDOWN = 10
 
 local defaultStoreData = {
 	Currency = 0,
@@ -18,19 +19,6 @@ local defaultStoreData = {
 	OwnedPasses = {},
 	ProcessedReceipts = {},
 }
-
-requestSync.OnServerInvoke = function(player)
-    local success, result = pcall(function()
-        -- Existing code
-    end)
-
-    if not success then
-        warn("RequestSync error:", result)
-        return DEFAULT_PAYLOAD
-    end
-
-    return result or DEFAULT_PAYLOAD
-end
 
 -- Replace placeholder IDs with the experiences actual product and gamepass ids.
 local DEV_PRODUCTS = {
@@ -67,6 +55,7 @@ local GAMEPASSES = {
 }
 
 local playerStoreCache: { [string]: typeof(defaultStoreData) } = {}
+local savePending: { [string]: { last: number, scheduled: boolean } } = {}
 local storeDataStore = DataStoreService:GetDataStore(STORE_DATASTORE_NAME)
 
 local function deepCopy<T>(source: { [any]: T }): { [any]: T }
@@ -204,18 +193,42 @@ local function getPlayerStoreData(player: Player)
 	return data
 end
 
-local function savePlayerStoreData(player: Player)
+local function savePlayerStoreData(player: Player, force: boolean?)
 	local userId = getPlayerKey(player)
 	local cached = playerStoreCache[userId]
 	if not cached then
 		return false
 	end
 
+	if not force then
+		local pending = savePending[userId]
+		if not pending then
+			pending = { last = 0, scheduled = false }
+			savePending[userId] = pending
+		end
+
+		local now = os.clock()
+		local elapsed = now - (pending.last or 0)
+		if elapsed < SAVE_COOLDOWN then
+			if not pending.scheduled then
+				pending.scheduled = true
+				task.delay(SAVE_COOLDOWN - elapsed, function()
+					pending.scheduled = false
+					savePlayerStoreData(player, true)
+				end)
+			end
+			return false
+		end
+		pending.last = now
+	end
+
 	return saveStoreData(userId, cached)
 end
 
 local function releasePlayerStoreData(player: Player)
-	playerStoreCache[getPlayerKey(player)] = nil
+	local key = getPlayerKey(player)
+	playerStoreCache[key] = nil
+	savePending[key] = nil
 end
 
 local function logIapGrant(player: Player, currencyCode: string, amount: number, source: string)
@@ -353,7 +366,7 @@ local function grantDevProduct(player: Player, productId: number, receiptId: str
 
 	dataTable.ProcessedReceipts[receiptId] = true
 
-	local saved = savePlayerStoreData(player)
+	local saved = savePlayerStoreData(player, true)
 	if not saved then
 		warn("[StoreService] Failed to persist data for receipt", receiptId)
 	else
@@ -399,7 +412,7 @@ local function onPlayerAdded(player: Player)
 end
 
 local function onPlayerRemoving(player: Player)
-	savePlayerStoreData(player)
+	savePlayerStoreData(player, true)
 	releasePlayerStoreData(player)
 end
 
@@ -418,7 +431,7 @@ MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, passI
 
 	local dataTable = getPlayerStoreData(player)
 	markPassOwned(player, dataTable, passId, config)
-	if savePlayerStoreData(player) then
+	if savePlayerStoreData(player, true) then
 		logStorePurchase(player, "Gamepass", passId, config.name)
 	end
 end)

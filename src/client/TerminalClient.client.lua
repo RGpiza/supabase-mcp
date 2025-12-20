@@ -12,17 +12,9 @@ localPlayer.AncestryChanged:Connect(function(_, parent)
 end)
 
 local function validatePayload(payload)
-    if type(payload) ~= "table" then return false, "payload not table" end
-    local function has(k) return payload[k] ~= nil end
-    if not (has("data") and has("stats") and has("boosts") and has("autobuy") and has("meta")) then
-        return false, "missing required keys"
+    if type(payload) ~= "table" then
+        return false, "payload not table"
     end
-    if payload.leaderboards ~= nil and type(payload.leaderboards) ~= "table" then
-        return false, "leaderboards must be table or nil"
-    end
-    if type(payload.meta) ~= "table" then return false, "meta not table" end
-    if type(payload.meta.serverTime) ~= "number" then return false, "meta.serverTime not number" end
-    if type(payload.meta.version) ~= "string" then return false, "meta.version not string" end
     return true
 end
 
