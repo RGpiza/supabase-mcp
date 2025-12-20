@@ -44,10 +44,6 @@ local globalAnnouncementEvent = ensureRemote("RemoteEvent", "GlobalAnnouncement"
 local globalStatsEvent = ensureRemote("RemoteEvent", "GlobalStatsUpdate")
 local serverPowerEvent = ensureRemote("RemoteEvent", "ServerPowerUpdate")
 local systemNotificationEvent = ensureRemote("RemoteEvent", "SystemNotification")
-local autoBuyPresetApplyEvent = ensureRemote("RemoteEvent", "AutoBuyPresetApply")
-local autoBuyPresetSaveEvent = ensureRemote("RemoteEvent", "AutoBuyPresetSave")
-local autoBuyPresetStateEvent = ensureRemote("RemoteEvent", "AutoBuyPresetState")
-local requestAutoBuyPresets = ensureRemote("RemoteFunction", "RequestAutoBuyPresets")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionService = require(script.Parent.ProductionService)
@@ -70,8 +66,6 @@ local storePlatformByPlayer = {}
 local offlinePreviewSent = {}
 local sessionInfo = {}
 local prestigePreviewState = {}
-local pendingPrestigePreviews = {}
-local clientReadyConnections = {}
 local sessionBonusLoopStarted = false
 local globalStatsLoopStarted = false
 local GLOBAL_STATS_BROADCAST_INTERVAL = 45
@@ -79,11 +73,6 @@ local SERVER_POWER_PER_PLAYER = 0.005
 local SERVER_POWER_CAP = 0.05
 
 local AUTOSAVE_INTERVAL = 60
-
-local sendSessionBonusUpdate
-local sendGlobalStats
-local sendServerPowerUpdate
-local sendSystemNotification
 
 local function shallowCopy(source)
 	if typeof(source) ~= "table" then
@@ -134,39 +123,7 @@ local function sendPrestigePreview(player, force)
 	end
 
 	prestigePreviewState[player] = shallowCopy(payload)
-	if player:GetAttribute("ClientReady") then
-		prestigePreviewEvent:FireClient(player, payload)
-	else
-		pendingPrestigePreviews[player] = payload
-	end
-end
-
-local function flushPendingPrestigePreview(player)
-	if not prestigePreviewEvent then
-		return
-	end
-
-	local pending = pendingPrestigePreviews[player] or prestigePreviewState[player]
-	if pending then
-		prestigePreviewEvent:FireClient(player, pending)
-		pendingPrestigePreviews[player] = nil
-	end
-end
-
-local function trackClientReady(player)
-	if clientReadyConnections[player] then
-		return
-	end
-
-	clientReadyConnections[player] = player:GetAttributeChangedSignal("ClientReady"):Connect(function()
-		if player:GetAttribute("ClientReady") then
-			flushPendingPrestigePreview(player)
-		end
-	end)
-
-	if player:GetAttribute("ClientReady") then
-		flushPendingPrestigePreview(player)
-	end
+	prestigePreviewEvent:FireClient(player, payload)
 end
 
 local function savePlayerWithStatus(player)
@@ -313,21 +270,6 @@ local function fireLoadingProgress(player, message, progress)
 	loadingProgressEvent:FireClient(player, message, progress)
 end
 
-local function sendAutoBuyPresetState(player)
-	if not autoBuyPresetStateEvent or not player then
-		return
-	end
-
-	local payload = AutomationService.GetPresetState(player)
-	if payload then
-		autoBuyPresetStateEvent:FireClient(player, payload)
-	end
-end
-
-AutomationService.OnPresetStateChanged(function(player)
-	sendAutoBuyPresetState(player)
-end)
-
 local function addPlayer(player)
 	fireLoadingProgress(player, "Loading data", 0.25)
 
@@ -344,7 +286,6 @@ local function addPlayer(player)
 	fireLoadingProgress(player, "Syncing boosts", 0.75)
 
 	activePlayers[player] = true
-	trackClientReady(player)
 	startAutosave(player)
 	sendPrestigePreview(player, true)
 	sendSessionBonusUpdate(player)
@@ -365,13 +306,8 @@ local function removePlayer(player)
 	offlinePreviewSent[player] = nil
 	sessionInfo[player] = nil
 	prestigePreviewState[player] = nil
-	pendingPrestigePreviews[player] = nil
-	if clientReadyConnections[player] then
-		clientReadyConnections[player]:Disconnect()
-		clientReadyConnections[player] = nil
-	end
 	sendServerPowerUpdate()
-	sendSystemNotification("ホ- Player disconnected")
+	sendSystemNotification("➖ Player disconnected")
 end
 
 local validStoreEventTypes = {
@@ -432,22 +368,6 @@ storeAnalyticsEvent.OnServerEvent:Connect(function(player, payload)
 	logStoreAnalytics(player, "Store" .. eventName, data)
 end)
 
-local function getActivePlayerCount()
-	local count = 0
-	for player in pairs(activePlayers) do
-		if player then
-			count += 1
-		end
-	end
-	return count
-end
-
-local function getServerPowerMultiplier(count)
-	local playerCount = count or getActivePlayerCount()
-	local bonus = math.min(playerCount * SERVER_POWER_PER_PLAYER, SERVER_POWER_CAP)
-	return 1 + bonus, playerCount
-end
-
 local function applyProduction(player, deltaTime)
 	if deltaTime <= 0 then
 		return nil, nil
@@ -477,7 +397,7 @@ local function applyProduction(player, deltaTime)
 	return dps, added
 end
 
-sendSessionBonusUpdate = function(player)
+local function sendSessionBonusUpdate(player)
 	if not sessionBonusEvent then
 		return
 	end
@@ -501,7 +421,23 @@ sendSessionBonusUpdate = function(player)
 	sessionBonusEvent:FireClient(player, payload)
 end
 
-sendServerPowerUpdate = function()
+local function getActivePlayerCount()
+	local count = 0
+	for player in pairs(activePlayers) do
+		if player then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function getServerPowerMultiplier(count)
+	local playerCount = count or getActivePlayerCount()
+	local bonus = math.min(playerCount * SERVER_POWER_PER_PLAYER, SERVER_POWER_CAP)
+	return 1 + bonus, playerCount
+end
+
+local function sendServerPowerUpdate()
 	if not serverPowerEvent then
 		return
 	end
@@ -513,14 +449,14 @@ sendServerPowerUpdate = function()
 	})
 end
 
-sendSystemNotification = function(message)
+local function sendSystemNotification(message)
 	if not systemNotificationEvent or typeof(message) ~= "string" then
 		return
 	end
 	systemNotificationEvent:FireAllClients(message)
 end
 
-sendGlobalStats = function(player)
+local function sendGlobalStats(player)
 	if not globalStatsEvent then
 		return
 	end
@@ -626,38 +562,6 @@ requestPrestigePreview.OnServerInvoke = function(player)
 	return PrestigeService.GetPreview(player)
 end
 
-if requestAutoBuyPresets then
-	requestAutoBuyPresets.OnServerInvoke = function(player)
-		return AutomationService.GetPresetState(player)
-	end
-end
-
-if autoBuyPresetApplyEvent then
-	autoBuyPresetApplyEvent.OnServerEvent:Connect(function(player, presetIndex)
-		if not player then
-			return
-		end
-
-		local success = AutomationService.ApplyPreset(player, presetIndex)
-		if not success then
-			sendAutoBuyPresetState(player)
-		end
-	end)
-end
-
-if autoBuyPresetSaveEvent then
-	autoBuyPresetSaveEvent.OnServerEvent:Connect(function(player, presetIndex, payload)
-		if not player then
-			return
-		end
-
-		local success = AutomationService.SavePreset(player, presetIndex, payload)
-		if not success then
-			sendAutoBuyPresetState(player)
-		end
-	end)
-end
-
 local function onPlayerRemoving(player)
 	local info = sessionInfo[player]
 	if info and info.lastOfflineEarnings then
@@ -686,7 +590,6 @@ for _, player in Players:GetPlayers() do
 	addPlayer(player)
 end
 
-AutomationService.Init()
 startProductionLoop()
 startSessionBonusLoop()
 startGlobalStatsLoop()
@@ -699,4 +602,3 @@ game:BindToClose(function()
 	end
 	GlobalStatsService.Save()
 end)
-
