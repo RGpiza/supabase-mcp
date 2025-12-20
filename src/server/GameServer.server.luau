@@ -71,6 +71,7 @@ local DataGrantService = require(script.Parent.DataGrantService)
 
 local activePlayers = {}
 local productionLoopStarted = false
+<<<<<<< HEAD
 local productionConnection
 local storeStateByPlayer = {}
 local storePlatformByPlayer = {}
@@ -86,6 +87,9 @@ local SERVER_POWER_PER_PLAYER = 0.005
 local SERVER_POWER_CAP = 0.05
 local weeklyWinnerInfo = nil
 local weeklyWinnerShown = {}
+=======
+local autosaveFlags = {}
+>>>>>>> parent of 0324c3d (Add automation, group bonus, and milestone services)
 
 local sendSessionBonusUpdate
 local sendGlobalStats
@@ -673,12 +677,12 @@ if GlobalStatsService.OnChanged then
 end
 
 local function startProductionLoop()
-	if productionLoopStarted or productionConnection then
+	if productionLoopStarted then
 		return
 	end
 	productionLoopStarted = true
 
-	productionConnection = RunService.Heartbeat:Connect(function(deltaTime)
+	RunService.Heartbeat:Connect(function(deltaTime)
 		if deltaTime <= 0 then
 			return
 		end
@@ -699,6 +703,7 @@ local function startSessionBonusLoop()
 	end
 	sessionBonusLoopStarted = true
 
+<<<<<<< HEAD
 	task.spawn(function()
 		while true do
 			task.wait(1)
@@ -709,6 +714,19 @@ local function startSessionBonusLoop()
 					activePlayers[player] = nil
 				end
 			end
+=======
+		if exampleDps then
+			lastDebugDps = exampleDps
+			lastDebugAmount = exampleAdded
+		end
+
+		if debugTimer >= 2 then
+			local avgDt = dtSamples > 0 and (dtAccumulator / dtSamples) or 0
+			print(string.format("[System Incremental] avg dt: %.4f, sample dps: %.2f, sample added: %.4f", avgDt, lastDebugDps or 0, lastDebugAmount or 0))
+			debugTimer = 0
+			dtAccumulator = 0
+			dtSamples = 0
+>>>>>>> parent of 0324c3d (Add automation, group bonus, and milestone services)
 		end
 	end)
 end
@@ -719,12 +737,16 @@ local function startGlobalStatsLoop()
 	end
 	globalStatsLoopStarted = true
 
+<<<<<<< HEAD
 	task.spawn(function()
 		while true do
 			task.wait(GLOBAL_STATS_BROADCAST_INTERVAL)
 			sendGlobalStats()
 		end
 	end)
+=======
+	return table.clone(data)
+>>>>>>> parent of 0324c3d (Add automation, group bonus, and milestone services)
 end
 
 -- RequestSync is handled by RequestSyncHandler; avoid assigning here to prevent conflicts.
