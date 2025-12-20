@@ -1,5 +1,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIPaths = require(script.Parent:FindFirstChild("UIPaths"))
 
 local GlobalStatsBinder = {
 	_context = nil,
@@ -48,16 +49,15 @@ local function resolveUi()
 	if not playerGui then
 		return nil
 	end
-	local terminalUi = playerGui:FindFirstChild("TerminalUI") or playerGui:FindFirstChild("TerminalUI", true)
+	local terminalUi = UIPaths.GetTerminalUI(playerGui)
 	if not terminalUi then
 		return nil
 	end
-	local root = terminalUi:FindFirstChild("Root") or terminalUi:FindFirstChild("Root", true)
+	local root = terminalUi:FindFirstChild("Root")
 	local safeArea = root and root:FindFirstChild("SafeArea")
 	local topBar = safeArea and safeArea:FindFirstChild("TopBar")
 	local dataValue = topBar and topBar:FindFirstChild("DataValue")
-	local rightPanel = (safeArea and safeArea:FindFirstChild("Main") and safeArea.Main:FindFirstChild("RightPanel"))
-		or terminalUi:FindFirstChild("RightPanel", true)
+	local rightPanel = safeArea and safeArea:FindFirstChild("Main") and safeArea.Main:FindFirstChild("RightPanel")
 	local globalPanel = rightPanel and rightPanel:FindFirstChild("GlobalStatsPanel")
 	local globalDataValue = globalPanel and globalPanel:FindFirstChild("GlobalStatsDataValue")
 	local globalPrestigeValue = globalPanel and globalPanel:FindFirstChild("GlobalStatsPrestigeValue")

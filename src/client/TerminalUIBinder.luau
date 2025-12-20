@@ -1,3 +1,4 @@
+local UIPaths = require(script.Parent:FindFirstChild("Modules"):FindFirstChild("UIPaths"))
 local TerminalUIBinder = {}
 local initialized = false
 local statsFallbackWarned = false
@@ -231,9 +232,9 @@ function TerminalUIBinder.Init(context)
 		return false
 	end
 
-	local screenGui = playerGui:WaitForChild("TerminalUI", 5)
+	local screenGui = UIPaths.GetTerminalUI(playerGui)
 	if not screenGui then
-		warn("[TerminalClient] TerminalUI failed to load")
+		warn("[TerminalClient] TerminalUI missing; aborting UI bind")
 		return false
 	end
 
@@ -265,9 +266,9 @@ function TerminalUIBinder.Init(context)
 	local cpuColumn = getChild(columns, "CPUColumn")
 	local ramColumn = getChild(columns, "RAMColumn")
 	local stoColumn = getChild(columns, "STOColumn")
-	local cpuCards = getChild(cpuColumn, "Cards_CPU")
-	local ramCards = getChild(ramColumn, "Cards_RAM")
-	local stoCards = getChild(stoColumn, "Cards_STORAGE")
+	local cpuCards = UIPaths.GetCardsCPU(screenGui) or getChild(cpuColumn, "Cards_CPU")
+	local ramCards = UIPaths.GetCardsRAM(screenGui) or getChild(ramColumn, "Cards_RAM")
+	local stoCards = UIPaths.GetCardsSTO(screenGui) or getChild(stoColumn, "Cards_STORAGE")
 	local rightPanel = getChild(main, "RightPanel")
 
 	local statsPage = nil

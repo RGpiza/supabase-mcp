@@ -1,3 +1,11 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local clientRoot = ReplicatedStorage:FindFirstChild("Client")
+if clientRoot and clientRoot:FindFirstChild("Framework") then
+	return {
+		Init = function() end,
+	}
+end
+
 local LoadingInitializer = {}
 
 local PRESET_ICON_DEFINITIONS = {
@@ -1819,35 +1827,27 @@ local function setupRuntimeSystems(args)
 	local cardsResolvedWarned = false
 	local function resolveCardContainers()
 		local screenGui = ui.screenGui
-		local rootFromGui = screenGui and (screenGui:FindFirstChild("Root") or screenGui:FindFirstChild("Root", true))
+		local rootFromGui = screenGui and screenGui:FindFirstChild("Root")
 		local safeAreaFromGui = rootFromGui and rootFromGui:FindFirstChild("SafeArea")
 		local mainFromGui = safeAreaFromGui and safeAreaFromGui:FindFirstChild("Main")
 		local columnsFromGui = mainFromGui and mainFromGui:FindFirstChild("Columns")
 		if not columns and main then
-			columns = safeFind(main, "Columns") or main:FindFirstChild("Columns", true)
+			columns = safeFind(main, "Columns")
 		end
 		if not columns and columnsFromGui then
 			columns = columnsFromGui
 		end
-		if not columns and screenGui then
-			columns = screenGui:FindFirstChild("Columns", true)
-		end
 		if not rightPanel and main then
-			rightPanel = safeFind(main, "RightPanel") or main:FindFirstChild("RightPanel", true)
+			rightPanel = safeFind(main, "RightPanel")
 		end
 		if not rightPanel and screenGui then
-			rightPanel = screenGui:FindFirstChild("RightPanel", true)
+			local mainNode = mainFromGui
+			rightPanel = mainNode and mainNode:FindFirstChild("RightPanel")
 		end
-		if columns then
-			local cpuColumn = columns:FindFirstChild("CPUColumn") or columns:FindFirstChild("CPUColumn", true)
-			local ramColumn = columns:FindFirstChild("RAMColumn") or columns:FindFirstChild("RAMColumn", true)
-			local stoColumn = columns:FindFirstChild("STOColumn") or columns:FindFirstChild("STOColumn", true)
-			cpuCards = cpuCards or (cpuColumn and cpuColumn:FindFirstChild("Cards_CPU", true))
-			ramCards = ramCards or (ramColumn and ramColumn:FindFirstChild("Cards_RAM", true))
-			stoCards = stoCards or (stoColumn and stoColumn:FindFirstChild("Cards_STORAGE", true))
-			cpuCards = cpuCards or columns:FindFirstChild("Cards_CPU", true)
-			ramCards = ramCards or columns:FindFirstChild("Cards_RAM", true)
-			stoCards = stoCards or columns:FindFirstChild("Cards_STORAGE", true)
+		if screenGui then
+			cpuCards = cpuCards or UIPaths.GetCardsCPU(screenGui)
+			ramCards = ramCards or UIPaths.GetCardsRAM(screenGui)
+			stoCards = stoCards or UIPaths.GetCardsSTO(screenGui)
 		end
 		if not cardsResolvedWarned and (not cpuCards or not ramCards or not stoCards) then
 			cardsResolvedWarned = true
@@ -2599,6 +2599,7 @@ local function setupRuntimeSystems(args)
 	local cardContainerWatchersAttached = false
 	local upgradeRenderExecuted = false
 	local upgradeRenderDiagLogged = false
+	local upgradeRenderSkipLogged = false
 	local coreSystemsStarted = false
 	local syncLoopStarted = false
 	local syncLoopWarningIssued = false
@@ -2640,6 +2641,14 @@ local function setupRuntimeSystems(args)
 	end
 
 	local function renderUpgrades(payload)
+		local pg = Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")
+		if pg and pg:GetAttribute("AuthoritativeUpgrades") == true then
+			if not upgradeRenderSkipLogged then
+				upgradeRenderSkipLogged = true
+				warn("[LoadingInitializer] Skipping legacy upgrade render (authoritative enabled)")
+			end
+			return
+		end
 		upgradeRenderExecuted = true
 		resolveCardContainers()
 		if not (cpuCards and ramCards and stoCards) then
@@ -3364,6 +3373,12 @@ end
 
 function LoadingInitializer.Init()
 	local success, errorMessage = pcall(function()
+		local GuardPlayers = game:GetService("Players")
+		local player = GuardPlayers.LocalPlayer
+		local playerGui = player and player:FindFirstChild("PlayerGui")
+		if playerGui and playerGui:GetAttribute("UIPipelineAuthoritative") == true then
+			return
+		end
 	-- Services
 	local Players = game:GetService("Players")
 	local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -3418,54 +3433,20 @@ function LoadingInitializer.Init()
 	end
 	local terminalUiWarned = false
 	local templateWarned = false
+	local UIPaths = require(script.Parent:FindFirstChild("Modules"):FindFirstChild("UIPaths"))
 
 	local function ensureTerminalUi(playerGuiRef)
 		if not playerGuiRef then
 			return nil
 		end
-
-		local screenGui = playerGuiRef:FindFirstChild("TerminalUI")
-		if not screenGui and StarterGui then
-			local template = StarterGui:FindFirstChild("TerminalUI") or StarterGui:FindFirstChild("TerminalUI", true)
-			if not template then
-				template = ReplicatedStorage and (ReplicatedStorage:FindFirstChild("TerminalUI") or ReplicatedStorage:FindFirstChild("TerminalUI", true))
-			end
-			if template and template:IsA("LayerCollector") then
-				screenGui = template:Clone()
-				screenGui.ResetOnSpawn = false
-				screenGui.Parent = playerGuiRef
-			elseif template and template:IsA("Instance") then
-				screenGui = template:Clone()
-				screenGui.Parent = playerGuiRef
-			end
-		end
-
-		if not screenGui then
-			local descendant = playerGuiRef:FindFirstChild("TerminalUI", true)
-			if descendant then
-				screenGui = descendant
-				screenGui.Parent = playerGuiRef
-			end
-		end
-
+		local screenGui = UIPaths.GetTerminalUI(playerGuiRef)
 		if screenGui then
-			if screenGui.Parent ~= playerGuiRef then
-				screenGui.Parent = playerGuiRef
-			end
-			if screenGui:IsA("LayerCollector") then
-				screenGui.Enabled = true
-				screenGui.ResetOnSpawn = false
-			end
-			local root = screenGui:FindFirstChild("Root")
-			if root and root:IsA("GuiObject") then
-				root.Visible = true
-			end
 			return screenGui
 		end
 
 		if not terminalUiWarned then
 			terminalUiWarned = true
-			warn("[TerminalClient] TerminalUI template missing; UI may not render")
+			warn("[TerminalClient] TerminalUI missing in PlayerGui; aborting ensure")
 		end
 		return nil
 	end
