@@ -37,7 +37,6 @@ local PrestigeService = require(script.Parent.PrestigeService)
 
 local activePlayers = {}
 local productionLoopStarted = false
-local productionConnection
 local autosaveFlags = {}
 
 local AUTOSAVE_INTERVAL = 60
@@ -135,12 +134,12 @@ local function applyProduction(player, deltaTime)
 end
 
 local function startProductionLoop()
-	if productionLoopStarted or productionConnection then
+	if productionLoopStarted then
 		return
 	end
 	productionLoopStarted = true
 
-	productionConnection = RunService.Heartbeat:Connect(function(deltaTime)
+	RunService.Heartbeat:Connect(function(deltaTime)
 		if deltaTime <= 0 then
 			return
 		end
@@ -171,6 +170,7 @@ local function startProductionLoop()
 
 		if debugTimer >= 2 then
 			local avgDt = dtSamples > 0 and (dtAccumulator / dtSamples) or 0
+			print(string.format("[System Incremental] avg dt: %.4f, sample dps: %.2f, sample added: %.4f", avgDt, lastDebugDps or 0, lastDebugAmount or 0))
 			debugTimer = 0
 			dtAccumulator = 0
 			dtSamples = 0
@@ -184,11 +184,7 @@ requestSync.OnServerInvoke = function(player)
 		return nil
 	end
 
-	local state = table.clone(data)
-	local dps = ProductionService.GetDataPerSecond(player)
-	state.dps = typeof(dps) == "number" and dps or 0
-
-	return state
+	return table.clone(data)
 end
 
 buyUpgradeEvent.OnServerEvent:Connect(function(player, upgradeId)

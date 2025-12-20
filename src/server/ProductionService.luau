@@ -1,8 +1,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
-local GroupBonusService = require(script.Parent.GroupBonusService)
-local PremiumBonusService = require(script.Parent.PremiumBonusService)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
 
 local ProductionService = {}
@@ -102,10 +100,7 @@ function ProductionService.GetDataPerSecond(player)
 	local totalMultiplier = accumulateRamMultiplier(upgrades)
 	local prestigeMultiplier = getPrestigeMultiplier(playerData)
 
-	local groupMultiplier = GroupBonusService.GetGroupMultiplier(player)
-	local premiumMultiplier = PremiumBonusService.GetPremiumMultiplier(player)
-
-	return (BASE_DPS + totalFlat) * totalMultiplier * prestigeMultiplier * groupMultiplier * premiumMultiplier
+	return (BASE_DPS + totalFlat) * totalMultiplier * prestigeMultiplier
 end
 
 return ProductionService
