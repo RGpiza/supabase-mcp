@@ -6,9 +6,6 @@
     "ReplicatedStorage": {
       "Shared": {
         "$path": "src/shared"
-      },
-      "Client": {
-        "$path": "src/replicatedstorage/client"
       }
     },
 

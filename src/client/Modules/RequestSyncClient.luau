@@ -1,19 +1,9 @@
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local clientRoot = ReplicatedStorage:FindFirstChild("Client")
-if clientRoot and clientRoot:FindFirstChild("Framework") then
-	return {
-		ProcessPayload = function()
-			return false
-		end,
-	}
-end
-
-local UIPipelineController = require(script.Parent:WaitForChild("UIPipelineController"))
+local UpgradeRenderer = require(script.Parent:WaitForChild("UpgradeRenderer"))
+local UpgradeBinder = require(script.Parent:WaitForChild("UpgradeBinder"))
 
 local RequestSyncClient = {
 	_lastHash = nil,
 }
-local loggedPayload = false
 
 local function stringifyUpgradeEntry(id, entry)
 	if type(entry) == "table" then
@@ -67,25 +57,17 @@ function RequestSyncClient.ProcessPayload(payload)
 	if type(payload) ~= "table" then
 		return false
 	end
-	if not loggedPayload then
-		loggedPayload = true
-		print("[RequestSyncClient] Payload:", payload)
-	end
-	local playerData = payload.playerData or payload.PlayerData
-	local upgrades = payload.upgrades or payload.Upgrades
-	if type(playerData) ~= "table" then
-		error("[RequestSyncClient] Missing playerData in payload")
-	end
-	if type(upgrades) ~= "table" or next(upgrades) == nil then
-		error("[RequestSyncClient] Missing upgrades in payload")
-	end
 	local hash = computePayloadHash(payload)
 	if hash ~= "" and hash == RequestSyncClient._lastHash then
 		return false
 	end
 	RequestSyncClient._lastHash = hash
 
-	return UIPipelineController.RenderFromPayload(payload) == true
+	UpgradeRenderer.Render(payload)
+	if type(UpgradeBinder.RebindAll) == "function" then
+		UpgradeBinder.RebindAll()
+	end
+	return true
 end
 
 return RequestSyncClient
