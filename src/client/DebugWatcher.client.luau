@@ -1,4 +1,4 @@
-local DEBUG_ENABLED = false
+local DEBUG_ENABLED = true
 
 if not DEBUG_ENABLED then
 	return
