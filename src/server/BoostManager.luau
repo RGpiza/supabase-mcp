@@ -3,7 +3,6 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
-local SaveScheduler = require(script.Parent.SaveScheduler)
 local BoostService = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("BoostService"))
 
 local BoostManager = {}
@@ -152,7 +151,6 @@ function BoostManager.AddBoostDuration(player, boostName, duration)
 
 	boosts[boostName] = existingExpiration + duration
 	PlayerDataService.Set(player, playerData)
-	SaveScheduler.FlushPlayer(player)
 	refreshPlayerBoosts(player)
 end
 

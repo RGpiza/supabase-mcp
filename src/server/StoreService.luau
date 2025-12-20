@@ -1,12 +1,9 @@
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MarketplaceService = game:GetService("MarketplaceService")
 local DataStoreService = game:GetService("DataStoreService")
 local AnalyticsService = game:GetService("AnalyticsService")
 
-local DataGrantService = require(script.Parent.DataGrantService)
 local BoostManager = require(script.Parent.BoostManager)
-local AutomationConstants = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("AutomationConstants"))
 
 local STORE_DATASTORE_NAME = "StoreService_PlayerData_V1"
 local MAX_RETRIES = 5
@@ -46,10 +43,6 @@ local GAMEPASSES = {
 	[222222] = {
 		name = "Faster Auto",
 		attribute = "HasFasterAutoPass",
-	},
-	[AutomationConstants.GamepassIdPreset4] = {
-		name = "Preset Slot 4",
-		attribute = AutomationConstants.Preset4Attribute,
 	},
 }
 
@@ -245,14 +238,8 @@ local function addCurrency(player: Player, dataTable, amount: number, source: st
 		return
 	end
 
-	local granted = DataGrantService.GrantData(player, amount, source or "DevProduct")
-	if granted <= 0 then
-		warn("[StoreService] Failed to grant currency for", player, source or "DevProduct", amount)
-		return
-	end
-
-	dataTable.Currency = math.max(0, (dataTable.Currency or 0) + granted)
-	logIapGrant(player, "DATA", granted, source or "DevProduct")
+	dataTable.Currency = math.max(0, (dataTable.Currency or 0) + amount)
+	logIapGrant(player, "DATA", amount, source or "DevProduct")
 end
 
 local function addBoost(player: Player, dataTable, boostName: string, duration: number)

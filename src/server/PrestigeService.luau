@@ -1,11 +1,8 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
-local SaveScheduler = require(script.Parent.SaveScheduler)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
 local EconomyAnalytics = require(script.Parent.EconomyAnalytics)
-local LeaderboardService = require(script.Parent.LeaderboardService)
-local GlobalStatsService = require(script.Parent.GlobalStatsService)
 
 local PrestigeService = {}
 
@@ -89,9 +86,7 @@ function PrestigeService.Prestige(player)
 	state.corePower = newBonusUnits
 
 	PlayerDataService.Set(player, state)
-	SaveScheduler.FlushPlayer(player, true)
-	LeaderboardService.ForceSync(player)
-	GlobalStatsService.AddPrestige(1)
+	PlayerDataService.Save(player)
 
 	if spentData > 0 then
 		EconomyAnalytics.LogSink(

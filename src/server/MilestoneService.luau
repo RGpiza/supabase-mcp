@@ -1,7 +1,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
-local DataGrantService = require(script.Parent.DataGrantService)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
 
 local MilestoneService = {}
@@ -24,8 +23,8 @@ local milestones = {
 		condition = function(state: PlayerState)
 			return UpgradeConfig.GetStorageTier(state.upgrades or {}) >= 2
 		end,
-		reward = function(player, state: PlayerState)
-			DataGrantService.GrantData(player, 10_000, "Milestone_storage_tier_2")
+		reward = function(state: PlayerState)
+			state.data = (state.data or 0) + 10_000
 		end,
 		message = "Storage Tier II unlocked! Bonus 10,000 Data.",
 	},
@@ -35,7 +34,7 @@ local milestones = {
 		condition = function(state: PlayerState)
 			return UpgradeConfig.GetStorageTier(state.upgrades or {}) >= 3
 		end,
-		reward = function(_, state: PlayerState)
+		reward = function(state: PlayerState)
 			state.corePower = (state.corePower or 0) + 1
 		end,
 		message = "Storage Tier III unlocked! +1 Core Power.",
@@ -46,8 +45,8 @@ local milestones = {
 		condition = function(state: PlayerState)
 			return (state.prestige or 0) >= 1
 		end,
-		reward = function(player, state: PlayerState)
-			DataGrantService.GrantData(player, 50_000, "Milestone_first_prestige")
+		reward = function(state: PlayerState)
+			state.data = (state.data or 0) + 50_000
 		end,
 		message = "First Prestige complete! Bonus 50,000 Data.",
 	},
@@ -69,12 +68,11 @@ end
 local function applyMilestones(player, state: PlayerState)
 	local completed = ensureMilestoneTable(state)
 	local changed = false
-	local originalCorePower = state.corePower
 
 	for _, milestone in ipairs(milestones) do
 		if not completed[milestone.id] and milestone.condition(state) then
 			if milestone.reward then
-				milestone.reward(player, state)
+				milestone.reward(state)
 			end
 			completed[milestone.id] = true
 			changed = true
@@ -83,13 +81,7 @@ local function applyMilestones(player, state: PlayerState)
 	end
 
 	if changed then
-		local updates = {
-			milestones = state.milestones,
-		}
-		if state.corePower ~= originalCorePower then
-			updates.corePower = state.corePower
-		end
-		PlayerDataService.Set(player, updates)
+		PlayerDataService.Set(player, state)
 	end
 end
 

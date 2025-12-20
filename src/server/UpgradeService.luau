@@ -1,7 +1,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
-local SaveScheduler = require(script.Parent.SaveScheduler)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
 
 local UpgradeService = {}
@@ -113,7 +112,6 @@ local function executePurchase(player, upgradeId, desiredQuantity)
 	state.upgrades[upgradeId] = resultingLevel
 
 	PlayerDataService.Set(player, state)
-	SaveScheduler.FlushPlayer(player)
 
 	local spent = math.max(0, startingData - remainingData)
 	return true, quantity, spent

@@ -22,7 +22,7 @@ type SpeedTierDefinition = {
 }
 
 local DEFAULT_PRIORITY = { "auto_cpu", "auto_ram", "auto_storage" }
-local PRESET_SLOT_COUNT = 4
+local PRESET_SLOT_COUNT = 3
 
 local DEFAULT_PRESETS = {
 	{
@@ -53,16 +53,6 @@ local DEFAULT_PRESETS = {
 			auto_storage = true,
 		},
 		priority = { "auto_storage", "auto_cpu", "auto_ram" },
-		speedTier = 0,
-	},
-	{
-		name = "Custom Slot",
-		enabled = {
-			auto_cpu = true,
-			auto_ram = true,
-			auto_storage = false,
-		},
-		priority = table.clone(DEFAULT_PRIORITY),
 		speedTier = 0,
 	},
 }
