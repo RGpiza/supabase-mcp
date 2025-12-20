@@ -64,87 +64,6 @@ end
 
 local diagnosticRan = false
 local upgradesUiEnsured = false
-local upgradeDiagnosticsRan = false
-
-local function runUpgradeDiagnosticsOnce()
-	if upgradeDiagnosticsRan then
-		return
-	end
-	upgradeDiagnosticsRan = true
-
-	local player = Players.LocalPlayer
-	local playerGui = player and player:FindFirstChild("PlayerGui")
-	if not playerGui then
-		print("[UpgradeDiagnostics] PlayerGui missing")
-		return
-	end
-
-	local terminalUi = playerGui:FindFirstChild("TerminalUI")
-		or playerGui:FindFirstChild("TerminalUI", true)
-	print("[UpgradeDiagnostics] TerminalUI exists:", terminalUi ~= nil)
-
-	local function safeGetChild(root, name)
-		return root and root:FindFirstChild(name)
-	end
-
-	local root = safeGetChild(terminalUi, "Root")
-	local safeArea = safeGetChild(root, "SafeArea")
-	local main = safeGetChild(safeArea, "Main")
-	local columns = safeGetChild(main, "Columns")
-	local cpuColumn = safeGetChild(columns, "CPUColumn")
-	local ramColumn = safeGetChild(columns, "RAMColumn")
-	local stoColumn = safeGetChild(columns, "STOColumn")
-	local cpuCards = safeGetChild(cpuColumn, "Cards_CPU") or (columns and columns:FindFirstChild("Cards_CPU", true))
-	local ramCards = safeGetChild(ramColumn, "Cards_RAM") or (columns and columns:FindFirstChild("Cards_RAM", true))
-	local stoCards = safeGetChild(stoColumn, "Cards_STORAGE") or (columns and columns:FindFirstChild("Cards_STORAGE", true))
-
-	local function countFrames(container)
-		if not container then
-			return 0
-		end
-		local count = 0
-		for _, child in ipairs(container:GetChildren()) do
-			if child:IsA("Frame") then
-				count += 1
-			end
-		end
-		return count
-	end
-
-	print("[UpgradeDiagnostics] Cards_CPU:", cpuCards and cpuCards:GetFullName() or "nil", "Frames:", countFrames(cpuCards))
-	print("[UpgradeDiagnostics] Cards_RAM:", ramCards and ramCards:GetFullName() or "nil", "Frames:", countFrames(ramCards))
-	print("[UpgradeDiagnostics] Cards_STORAGE:", stoCards and stoCards:GetFullName() or "nil", "Frames:", countFrames(stoCards))
-
-	local upgradeTemplate = playerGui:FindFirstChild("UpgradeCardTemplate")
-		or playerGui:FindFirstChild("UpgradeCardTemplate", true)
-	local templateLocation = upgradeTemplate and upgradeTemplate:GetFullName() or "nil"
-	if not upgradeTemplate then
-		local starterTemplate = StarterGui:FindFirstChild("UpgradeCardTemplate")
-			or StarterGui:FindFirstChild("UpgradeCardTemplate", true)
-		local replicatedTemplate = ReplicatedStorage:FindFirstChild("UpgradeCardTemplate")
-			or ReplicatedStorage:FindFirstChild("UpgradeCardTemplate", true)
-		upgradeTemplate = starterTemplate or replicatedTemplate
-		templateLocation = upgradeTemplate and upgradeTemplate:GetFullName() or "nil"
-	end
-	print("[UpgradeDiagnostics] UpgradeCardTemplate:", templateLocation)
-
-	local upgradeFrames = {}
-	for _, node in ipairs(playerGui:GetDescendants()) do
-		if node:IsA("Frame") then
-			local lowerName = string.lower(node.Name)
-			local matchesName = string.find(lowerName, "upgrade", 1, true) ~= nil
-			local hasBuyButton = node:FindFirstChild("CardBuyButton", true)
-				or node:FindFirstChild("BuyButton", true)
-			if matchesName or hasBuyButton then
-				table.insert(upgradeFrames, node)
-			end
-		end
-	end
-	print("[UpgradeDiagnostics] Upgrade-like Frames in PlayerGui:", #upgradeFrames)
-	for i = 1, math.min(#upgradeFrames, 5) do
-		print("[UpgradeDiagnostics] Frame:", upgradeFrames[i]:GetFullName())
-	end
-end
 
 local function tryFindPath(root, path)
 	local current = root
@@ -327,7 +246,6 @@ task.spawn(function()
 	local playerGui = player and player:FindFirstChild("PlayerGui")
 	if playerGui and not uiEnsured then
 		uiEnsured = true
-		task.defer(runUpgradeDiagnosticsOnce)
 		task.defer(ensureUpgradeUi)
 		playerGui.DescendantAdded:Connect(function(child)
 			if child and (child.Name == "TerminalUI" or child.Name == "UpgradeCardTemplate") then
