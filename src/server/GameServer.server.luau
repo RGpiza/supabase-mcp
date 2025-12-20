@@ -7,42 +7,55 @@ local REMOTES_FOLDER_NAME = "Remotes"
 local PLAYER_GUI_WAIT_TIME = 5
 local PRESTIGE_OFFLINE_STEP = 0.1
 
-local remotesFolder = ReplicatedStorage:WaitForChild("Remotes", 5)
-if not remotesFolder then
-	warn("[GameServer] Remotes folder not found after timeout.")
-	return
+local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+if not remotesFolder or not remotesFolder:IsA("Folder") then
+	remotesFolder = Instance.new("Folder")
+	remotesFolder.Name = REMOTES_FOLDER_NAME
+	remotesFolder.Parent = ReplicatedStorage
 end
 
-local function safeGetRemote(name)
-	return remotesFolder:FindFirstChild(name)
+local function ensureRemote(instanceClass, name)
+	local existing = remotesFolder:FindFirstChild(name)
+	if existing and existing:IsA(instanceClass) then
+		return existing
+	end
+
+	if existing then
+		existing:Destroy()
+	end
+
+	local remote = Instance.new(instanceClass)
+	remote.Name = name
+	remote.Parent = remotesFolder
+	return remote
 end
 
-local requestSync = safeGetRemote("RequestSync")
-local getLeaderboard = safeGetRemote("GetLeaderboard")
-local getLifetimeLeaderboard = safeGetRemote("GetLifetimeLeaderboard")
-local purchaseUpgradeEvent = safeGetRemote("PurchaseUpgrade")
-local prestigeEvent = safeGetRemote("RequestPrestige")
-local requestPrestigePreview = safeGetRemote("RequestPrestigePreview")
-local saveStatusEvent = safeGetRemote("SaveStatus")
-local storeAnalyticsEvent = safeGetRemote("StoreAnalyticsEvent")
-local offlinePreviewEvent = safeGetRemote("OfflineEarningsPreview")
-local weeklyResetTimeFunction = safeGetRemote("GetWeeklyResetTime")
-local loadingProgressEvent = safeGetRemote("LoadingProgress")
-local prestigePreviewEvent = safeGetRemote("PrestigePreviewUpdate")
-local sessionBonusEvent = safeGetRemote("SessionBonusUpdate")
-local globalAnnouncementEvent = safeGetRemote("GlobalAnnouncement")
-local globalStatsEvent = safeGetRemote("GlobalStatsUpdated")
-local getGlobalStatsFunction = safeGetRemote("GetGlobalStats")
-local serverPowerEvent = safeGetRemote("ServerPowerUpdate")
-local systemNotificationEvent = safeGetRemote("SystemNotification")
-local autoBuyPresetApplyEvent = safeGetRemote("AutoBuyPresetApply")
-local autoBuyPresetSaveEvent = safeGetRemote("AutoBuyPresetSave")
-local autoBuyPresetStateEvent = safeGetRemote("AutoBuyPresetState")
-local requestAutoBuyPresets = safeGetRemote("RequestAutoBuyPresets")
-local autoBuyPresetUnlockPromptEvent = safeGetRemote("AutoBuyPresetUnlockPrompt")
-local autoBuyAutoSwitchSettingsEvent = safeGetRemote("AutoBuyAutoSwitchSettings")
-local setAutoBuyEvent = safeGetRemote("SetAutoBuy")
-local autoBuyStateEvent = safeGetRemote("AutoBuyState")
+local requestSync = ensureRemote("RemoteFunction", "RequestSync")
+local getLeaderboard = ensureRemote("RemoteFunction", "GetLeaderboard")
+local getLifetimeLeaderboard = ensureRemote("RemoteFunction", "GetLifetimeLeaderboard")
+local purchaseUpgradeEvent = ensureRemote("RemoteEvent", "PurchaseUpgrade")
+local prestigeEvent = ensureRemote("RemoteEvent", "RequestPrestige")
+local requestPrestigePreview = ensureRemote("RemoteFunction", "RequestPrestigePreview")
+local saveStatusEvent = ensureRemote("RemoteEvent", "SaveStatus")
+local storeAnalyticsEvent = ensureRemote("RemoteEvent", "StoreAnalyticsEvent")
+local offlinePreviewEvent = ensureRemote("RemoteEvent", "OfflineEarningsPreview")
+local weeklyResetTimeFunction = ensureRemote("RemoteFunction", "GetWeeklyResetTime")
+local loadingProgressEvent = ensureRemote("RemoteEvent", "LoadingProgress")
+local prestigePreviewEvent = ensureRemote("RemoteEvent", "PrestigePreviewUpdate")
+local sessionBonusEvent = ensureRemote("RemoteEvent", "SessionBonusUpdate")
+local globalAnnouncementEvent = ensureRemote("RemoteEvent", "GlobalAnnouncement")
+local globalStatsEvent = ensureRemote("RemoteEvent", "GlobalStatsUpdated")
+local getGlobalStatsFunction = ensureRemote("RemoteFunction", "GetGlobalStats")
+local serverPowerEvent = ensureRemote("RemoteEvent", "ServerPowerUpdate")
+local systemNotificationEvent = ensureRemote("RemoteEvent", "SystemNotification")
+local autoBuyPresetApplyEvent = ensureRemote("RemoteEvent", "AutoBuyPresetApply")
+local autoBuyPresetSaveEvent = ensureRemote("RemoteEvent", "AutoBuyPresetSave")
+local autoBuyPresetStateEvent = ensureRemote("RemoteEvent", "AutoBuyPresetState")
+local requestAutoBuyPresets = ensureRemote("RemoteFunction", "RequestAutoBuyPresets")
+local autoBuyPresetUnlockPromptEvent = ensureRemote("RemoteEvent", "AutoBuyPresetUnlockPrompt")
+local autoBuyAutoSwitchSettingsEvent = ensureRemote("RemoteEvent", "AutoBuyAutoSwitchSettings")
+local setAutoBuyEvent = ensureRemote("RemoteEvent", "SetAutoBuy")
+local autoBuyStateEvent = ensureRemote("RemoteEvent", "AutoBuyState")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionService = require(script.Parent.ProductionService)
@@ -695,29 +708,17 @@ local function startGlobalStatsLoop()
 	end)
 end
 
-if requestSync then
-	requestSync.OnServerInvoke = function(player)
-		local data = PlayerDataService.Get(player)
-		if typeof(data) ~= "table" then
-			return {
-				data = {},
-				stats = {},
-				boosts = {},
-				autobuy = {},
-				store = { ready = false, items = {} },
-				leaderboards = { lifetime = {}, weekly = {}, friends = {} },
-				meta = { serverTime = os.time(), version = "1.0" }
-			}
-		end
+requestSync.OnServerInvoke = function(player)
+	local data = PlayerDataService.Get(player)
+	if typeof(data) ~= "table" then
+		return nil
+	end
 
-		local state = table.clone(data)
-		local dps = ProductionService.GetDataPerSecond(player)
-		state.dps = typeof(dps) == "number" and dps or 0
+	local state = table.clone(data)
+	local dps = ProductionService.GetDataPerSecond(player)
+	state.dps = typeof(dps) == "number" and dps or 0
 
 	return state
-	end
-else
-	warn("[GameServer] RequestSync remote not found - OnServerInvoke not assigned.")
 end
 
 if getLeaderboard then

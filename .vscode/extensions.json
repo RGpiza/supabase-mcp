@@ -1,8 +1,5 @@
 {
     "recommendations": [
-        "actboy168.lua-debug",
-        "10nates.ollama-autocoder",
-        "rivanmota.ollama-ai",
-        "muftyoftech.ask-codebase"
+        "actboy168.lua-debug"
     ]
 }

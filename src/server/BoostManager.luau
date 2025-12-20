@@ -27,8 +27,6 @@ if not boostEvent or not boostEvent:IsA("RemoteEvent") then
 	boostEvent.Parent = remotesFolder
 end
 
-
-
 local activePlayers: { [Player]: boolean } = {}
 local multiplierCache: { [Player]: { multiplier: number, boosts: { [string]: number } } } = {}
 local accumulatedTime = 0

@@ -19,19 +19,6 @@ local defaultStoreData = {
 	ProcessedReceipts = {},
 }
 
-requestSync.OnServerInvoke = function(player)
-    local success, result = pcall(function()
-        -- Existing code
-    end)
-
-    if not success then
-        warn("RequestSync error:", result)
-        return DEFAULT_PAYLOAD
-    end
-
-    return result or DEFAULT_PAYLOAD
-end
-
 -- Replace placeholder IDs with the experiences actual product and gamepass ids.
 local DEV_PRODUCTS = {
 	[111111] = {

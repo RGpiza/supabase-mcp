@@ -18,20 +18,6 @@ local SUMMARY_INTERVAL = 120
 local automationById = {}
 local automationByAttribute = {}
 local isAutomationUnlocked
-
-requestSync.OnServerInvoke = function(player)
-    local success, result = pcall(function()
-        -- Existing code
-    end)
-
-    if not success then
-        warn("RequestSync error:", result)
-        return DEFAULT_PAYLOAD
-    end
-
-    return result or DEFAULT_PAYLOAD
-end
-
 local DEFAULT_PRIORITY = AutomationConfig.GetDefaultPriority()
 local maxSpeedTier = AutomationConfig.GetMaxSpeedTier()
 local presetSlotCount = AutomationConfig.GetPresetSlotCount()
