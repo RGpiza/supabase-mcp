@@ -153,10 +153,149 @@ local success, errorMessage = pcall(function()
 		return
 	end
 
+	local function normalizeBackgrounds()
+		root.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
+		if root:IsA("Frame") then
+			root.BackgroundTransparency = 0
+		end
+		safeArea.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
+		if safeArea:IsA("Frame") then
+			safeArea.BackgroundTransparency = 0
+		end
+		main.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
+		if main:IsA("Frame") then
+			main.BackgroundTransparency = 0
+		end
+		columns.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+		if columns:IsA("Frame") then
+			columns.BackgroundTransparency = 0
+		end
+		rightPanel.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+		if rightPanel:IsA("Frame") then
+			rightPanel.BackgroundTransparency = 0
+		end
+		cpuCardsFolder.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+		cpuCardsFolder.BackgroundTransparency = 0
+		ramCardsFolder.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+		ramCardsFolder.BackgroundTransparency = 0
+		stoCardsFolder.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+		stoCardsFolder.BackgroundTransparency = 0
+	end
+
+	local function forceUIVisible()
+		terminalUi.Enabled = true
+		terminalUi.DisplayOrder = 100
+
+		local function forcePanel(frame)
+			if frame and frame:IsA("Frame") then
+				frame.Visible = true
+				frame.BackgroundTransparency = 0
+			elseif frame and frame:IsA("GuiObject") then
+				frame.Visible = true
+			end
+		end
+
+		forcePanel(root)
+		forcePanel(safeArea)
+		forcePanel(main)
+		forcePanel(columns)
+		forcePanel(rightPanel)
+
+		local function forceCards(container)
+			if not container then
+				return
+			end
+			for _, child in ipairs(container:GetChildren()) do
+				if child:IsA("Frame") then
+					child.Visible = true
+					child.BackgroundTransparency = 0
+					local title = child:FindFirstChild("CardTitle") or child:FindFirstChild("Title")
+					local desc = child:FindFirstChild("CardDesc") or child:FindFirstChild("Description")
+					local cost = child:FindFirstChild("CardCostLabel") or child:FindFirstChild("Cost")
+					if title and title:IsA("TextLabel") then
+						title.TextTransparency = 0
+					end
+					if desc and desc:IsA("TextLabel") then
+						desc.TextTransparency = 0
+					end
+					if cost and cost:IsA("TextLabel") then
+						cost.TextTransparency = 0
+					end
+					local buyButton = child:FindFirstChild("CardBuyButton") or child:FindFirstChild("BuyButton")
+					if buyButton and buyButton:IsA("GuiButton") then
+						buyButton.Active = true
+						buyButton.AutoButtonColor = true
+						buyButton.Selectable = true
+					end
+				end
+			end
+		end
+
+		forceCards(cpuCardsFolder)
+		forceCards(ramCardsFolder)
+		forceCards(stoCardsFolder)
+
+		local storeOverlay = safeArea:FindFirstChild("StoreOverlay")
+		if storeOverlay and storeOverlay:IsA("GuiObject") then
+			storeOverlay.Visible = false
+		end
+
+		local bgOne = 0
+		local textOne = 0
+		for _, desc in ipairs(terminalUi:GetDescendants()) do
+			if desc:IsA("GuiObject") and desc.BackgroundTransparency >= 1 then
+				bgOne += 1
+			end
+			if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.TextTransparency >= 1 then
+				textOne += 1
+			end
+		end
+		print(("[TerminalClient] Transparency dump: Background=1 count=%d Text=1 count=%d"):format(bgOne, textOne))
+		if bgOne > 0 or textOne > 0 then
+			for _, desc in ipairs(terminalUi:GetDescendants()) do
+				if desc:IsA("GuiObject") and desc.BackgroundTransparency >= 1 then
+					print(("[TerminalClient] BackgroundTransparency=1: %s"):format(desc:GetFullName()))
+				end
+				if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.TextTransparency >= 1 then
+					print(("[TerminalClient] TextTransparency=1: %s"):format(desc:GetFullName()))
+				end
+			end
+		end
+	end
+
+	normalizeBackgrounds()
+	forceUIVisible()
+	print("[UI FIX] Background transparency normalization complete")
+
 	local statsBox = safeWait(rightPanel, "StatsBox", 5)
 	local statsDpsValue = statsBox and statsBox:FindFirstChild("DpsValue")
 	local statsPrestigeValue = statsBox and statsBox:FindFirstChild("PrestigeValue")
 	local statsCorePowerValue = statsBox and statsBox:FindFirstChild("CorePowerValue")
+
+	local function findLabelByNames(rootNode, names)
+		if not rootNode then
+			return nil
+		end
+		for _, name in ipairs(names) do
+			local found = rootNode:FindFirstChild(name, true)
+			if found and (found:IsA("TextLabel") or found:IsA("TextButton")) then
+				return found
+			end
+		end
+		return nil
+	end
+
+	local systemCpuValue = findLabelByNames(rightPanel, { "CpuValue", "CPUValue", "CpuStatValue", "CPUStatValue", "CpuStat", "CPUStat" })
+	local systemRamValue = findLabelByNames(rightPanel, { "RamValue", "RAMValue", "RamStatValue", "RAMStatValue", "RamStat", "RAMStat" })
+	local systemStorageValue = findLabelByNames(rightPanel, { "StorageValue", "STOValue", "StorageStatValue", "STOStatValue", "StorageStat", "STOStat" })
+
+	local multBaseValue = findLabelByNames(rightPanel, { "BaseValue", "BaseOutputValue", "BaseStatValue" })
+	local multAddValue = findLabelByNames(rightPanel, { "AddValue", "AdditiveValue", "AdditiveStatValue" })
+	local multUpgradeValue = findLabelByNames(rightPanel, { "UpgradeMultiplierValue", "UpgradeMulValue", "UpgradeMultiplier" })
+	local multPrestigeValue = findLabelByNames(rightPanel, { "PrestigeMultiplierValue", "PrestigeMulValue", "PrestigeMultiplier" })
+	local multPassValue = findLabelByNames(rightPanel, { "PassMultiplierValue", "PassMulValue", "PassMultiplier" })
+	local multBoostValue = findLabelByNames(rightPanel, { "BoostMultiplierValue", "BoostMulValue", "BoostMultiplier" })
+	local multFinalValue = findLabelByNames(rightPanel, { "FinalValue", "FinalDpsValue", "FinalStatValue" })
 
 	local prestigeBox = safeWait(rightPanel, "PrestigeBox", 5)
 	local prestigeButton = prestigeBox and prestigeBox:FindFirstChild("PrestigeButton")
@@ -222,619 +361,69 @@ local success, errorMessage = pcall(function()
 		toastLabel.Parent = safeArea
 	end
 
-	local playerState = {
-		data = 0,
-		upgrades = {},
-		prestige = 0,
-		corePower = 0,
-	}
-
-	local upgradeCards = {}
-	local storageTierMap = {
-		[1] = "sto_1",
-		[2] = "sto_2",
-		[3] = "sto_3",
-	}
-	local upgradeRequirements = {
-		sto_2 = 1,
-		sto_3 = 2,
-		cpu_2 = 2,
-		cpu_3 = 3,
-		ram_2 = 2,
-	}
-
-	local lastKnownTier = 0
-	local lastKnownDps = 0
-	local predictedData = 0
-	local displayedData = 0
-	local syncInProgress = false
-	local saveStatusHideToken
-
-	local function lerpNumber(current, target, alpha)
-		alpha = math.clamp(alpha, 0, 1)
-		return current + ((target - current) * alpha)
+	local upgradeControllerModule = script.Parent:FindFirstChild("UpgradeController")
+	if not upgradeControllerModule then
+		warn("[TerminalClient] UpgradeController missing")
+		return
 	end
+	local UpgradeController = require(upgradeControllerModule)
 
-	local function formatNumber(value)
-		return NumberFormatter.format(value or 0)
-	end
-
-	local function ensureUIScale(instance)
-		if not instance then
-			return nil
-		end
-
-		local uiScale = instance:FindFirstChildOfClass("UIScale")
-		if not uiScale then
-			uiScale = Instance.new("UIScale")
-			uiScale.Scale = 1
-			uiScale.Parent = instance
-		end
-
-		return uiScale
-	end
-
-	local function applyHoverEffects(button)
-		if not button or not button:IsA("TextButton") then
-			return
-		end
-
-		if button:GetAttribute("HoverBound") then
-			return
-		end
-		button:SetAttribute("HoverBound", true)
-
-		local originalColor = button.BackgroundColor3
-		local originalTextColor = button.TextColor3
-		button:SetAttribute("OriginalColor", originalColor)
-		button:SetAttribute("OriginalTextColor", originalTextColor)
-		button.AutoButtonColor = false
-
-		local uiScale = ensureUIScale(button)
-
-		button.MouseEnter:Connect(function()
-			if button.Active then
-				button.BackgroundColor3 = originalColor:Lerp(Color3.new(1, 1, 1), 0.1)
-			end
-		end)
-
-		button.MouseLeave:Connect(function()
-			button.BackgroundColor3 = originalColor
-			if uiScale then
-				TweenService:Create(uiScale, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-			end
-		end)
-
-		button.MouseButton1Down:Connect(function()
-			if uiScale then
-				TweenService:Create(uiScale, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.97 }):Play()
-			end
-		end)
-
-		button.MouseButton1Up:Connect(function()
-			if uiScale then
-				TweenService:Create(uiScale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-			end
-		end)
-	end
-
-	local function setButtonState(button, enabled, text)
-		if not button then
-			return
-		end
-
-		button.Text = text or button.Text
-		button.Active = enabled
-		button.AutoButtonColor = false
-		button.Selectable = enabled
-		local originalColor = button:GetAttribute("OriginalColor") or button.BackgroundColor3
-		local originalTextColor = button:GetAttribute("OriginalTextColor") or button.TextColor3
-
-		if enabled then
-			button.BackgroundColor3 = originalColor
-			button.TextColor3 = originalTextColor
-			button.TextTransparency = 0
-			button.BackgroundTransparency = 0
-		else
-			button.BackgroundColor3 = originalColor:Lerp(Color3.fromRGB(80, 80, 80), 0.4)
-			button.TextColor3 = originalTextColor:Lerp(Color3.fromRGB(200, 200, 200), 0.4)
-			button.TextTransparency = 0.1
-			button.BackgroundTransparency = 0.1
+	local storeControllerModule = script.Parent:FindFirstChild("StoreUIController")
+	local StoreUIController = storeControllerModule and require(storeControllerModule)
+	local storeRoot = safeArea:FindFirstChild("StoreUI") or safeArea:FindFirstChild("StoreOverlay")
+	local function handleSync(payload)
+		if StoreUIController then
+			StoreUIController.Update(payload)
 		end
 	end
-
-	local function stylizeStorageCard(card, unlocked)
-		if not card then
-			return
-		end
-
-		local stroke = card:FindFirstChildOfClass("UIStroke")
-		if not stroke then
-			stroke = Instance.new("UIStroke")
-			stroke.Thickness = 2
-			stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-			stroke.Parent = card
-		end
-
-		if unlocked then
-			stroke.Color = Color3.fromRGB(255, 214, 10)
-			stroke.Transparency = 0.05
-		else
-			stroke.Color = Color3.fromRGB(120, 200, 120)
-			stroke.Transparency = 0.3
-		end
-	end
-
-	local toastCooldown = false
-
-	local function showToast(message)
-		if not toastLabel then
-			return
-		end
-
-		if toastCooldown then
-			return
-		end
-
-		toastCooldown = true
-		toastLabel.Text = message
-		toastLabel.TextTransparency = 1
-		toastLabel.Visible = true
-
-		local fadeIn = TweenService:Create(toastLabel, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0 })
-		local fadeOut = TweenService:Create(toastLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { TextTransparency = 1 })
-
-		fadeIn.Completed:Connect(function()
-			task.delay(1.2, function()
-				fadeOut:Play()
-			end)
-		end)
-
-		fadeOut.Completed:Connect(function()
-			toastLabel.Visible = false
-			toastCooldown = false
-		end)
-
-		fadeIn:Play()
-	end
-
-	local activePulseTweens = {}
-
-	local function highlightStorageCard(card, tier)
-		if not card then
-			return
-		end
-
-		local uiScale = ensureUIScale(card)
-		local pulseInfo = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, false, 0)
-		local shrinkInfo = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In, 0, false, 0)
-
-		if uiScale then
-			if activePulseTweens[card] then
-				activePulseTweens[card]:Cancel()
-			end
-
-			local tweenUp = TweenService:Create(uiScale, pulseInfo, { Scale = 1.05 })
-			local tweenDown = TweenService:Create(uiScale, shrinkInfo, { Scale = 1 })
-			activePulseTweens[card] = tweenUp
-
-			tweenUp.Completed:Connect(function()
-				tweenDown:Play()
-				activePulseTweens[card] = nil
-			end)
-
-			tweenDown.Completed:Connect(function()
-				if activePulseTweens[card] == tweenDown then
-					activePulseTweens[card] = nil
+	if StoreUIController then
+		StoreUIController.Init({
+			terminalUi = terminalUi,
+			storeRoot = storeRoot,
+			player = player,
+			onRequestSync = function()
+				if UpgradeController.RequestSyncNow then
+					UpgradeController.RequestSyncNow()
 				end
-			end)
-
-			tweenUp:Play()
-		end
-
-		local stroke = card:FindFirstChildOfClass("UIStroke")
-		if stroke then
-			local originalTransparency = stroke.Transparency
-			stroke.Transparency = 0
-			task.delay(0.3, function()
-				if stroke then
-					stroke.Transparency = originalTransparency
-				end
-			end)
-		end
-
-		showToast(string.format("Storage Tier %d Unlocked", tier))
+			end,
+		})
 	end
 
-	local function setSaveStatus(state)
-		if not saveStatusLabel then
-			return
-		end
-
-		if state == "saving" then
-			saveStatusLabel.Text = "Saving..."
-		elseif state == "saved" then
-			saveStatusLabel.Text = "Saved"
-			local token = {}
-			saveStatusHideToken = token
-			task.delay(1.5, function()
-				if saveStatusHideToken == token then
-					saveStatusLabel.Text = ""
-				end
-			end)
-		elseif state == "offline" then
-			saveStatusLabel.Text = "Offline"
-		end
-	end
-
-	local cpuUpgrades = UpgradeConfig.GetUpgradesByBranch("CPU")
-	local ramUpgrades = UpgradeConfig.GetUpgradesByBranch("RAM")
-	local BASE_DPS = 1
-	local PRESTIGE_UNIT = 0.1
-
-	local function getUpgradeLevel(upgradeId)
-		if typeof(playerState.upgrades) ~= "table" then
-			return 0
-		end
-
-		local level = playerState.upgrades[upgradeId]
-		if typeof(level) ~= "number" then
-			return 0
-		end
-
-		return math.max(level, 0)
-	end
-
-	local function calculateClientDps()
-		local flat = 0
-		for _, upgrade in ipairs(cpuUpgrades) do
-			local level = getUpgradeLevel(upgrade.id)
-			if level > 0 then
-				local effect = upgrade.effect(level)
-				if effect and typeof(effect.flatDps) == "number" then
-					flat += effect.flatDps
-				end
-			end
-		end
-
-		local multiplier = 1
-		for _, upgrade in ipairs(ramUpgrades) do
-			local level = getUpgradeLevel(upgrade.id)
-			if level > 0 then
-				local effect = upgrade.effect(level)
-				if effect and typeof(effect.multiplier) == "number" then
-					multiplier *= effect.multiplier
-				end
-			end
-		end
-
-		local corePower = typeof(playerState.corePower) == "number" and playerState.corePower or 0
-		local prestigeMultiplier = 1 + (corePower * PRESTIGE_UNIT)
-
-		return (BASE_DPS + flat) * multiplier * prestigeMultiplier
-	end
-
-	local function updateStats()
-		if statsDpsValue then
-			statsDpsValue.Text = formatNumber(lastKnownDps)
-		end
-
-		if statsPrestigeValue then
-			statsPrestigeValue.Text = string.format("Prestige %d", playerState.prestige or 0)
-		end
-
-		if statsCorePowerValue then
-			statsCorePowerValue.Text = string.format("Core Power %s", formatNumber(playerState.corePower or 0))
-		end
-	end
-
-	local function buildEffectText(upgrade, level)
-		if level >= upgrade.maxLevel then
-			if upgrade.branch == "STORAGE" then
-				return "UNLOCKED"
-			end
-			return "Maxed"
-		end
-
-		local currentEffect = upgrade.effect(level)
-		local nextEffect = upgrade.effect(level + 1)
-
-		local currentFlat = currentEffect and currentEffect.flatDps or 0
-		local nextFlat = nextEffect and nextEffect.flatDps or 0
-		local currentMult = currentEffect and currentEffect.multiplier or 1
-		local nextMult = nextEffect and nextEffect.multiplier or 1
-
-		if nextFlat > currentFlat then
-			local delta = nextFlat - currentFlat
-			return string.format("+%s Data/sec", formatNumber(delta))
-		end
-
-		if nextMult > currentMult then
-			local deltaPercent = ((nextMult - currentMult) * 100)
-			return string.format("+%.0f%% Global", deltaPercent)
-		end
-
-		if upgrade.branch == "STORAGE" and nextEffect and nextEffect.storageTier then
-			return string.format("Unlocks Tier %d", nextEffect.storageTier)
-		end
-
-		return "Upgrade"
-	end
-
-	local function setPrestigeState(canPrestige)
-		if prestigeButton then
-			setButtonState(prestigeButton, canPrestige, canPrestige and "PRESTIGE" or "LOCKED")
-		end
-
-		if prestigeOverlay then
-			prestigeOverlay.Visible = not canPrestige
-		end
-	end
-
-	local function applyStorageTierHighlights(newTier)
-		if newTier <= lastKnownTier then
-			lastKnownTier = newTier
-			return
-		end
-
-		for tier = lastKnownTier + 1, newTier do
-			local upgradeId = storageTierMap[tier]
-			local cardEntry = upgradeCards[upgradeId]
-			if cardEntry then
-				highlightStorageCard(cardEntry.card, tier)
-			end
-		end
-
-		lastKnownTier = newTier
-	end
-
-	local function refreshUpgradeCard(upgradeId)
-		local cardEntry = upgradeCards[upgradeId]
-		if not cardEntry then
-			return
-		end
-
-		local upgrade = cardEntry.definition
-		local currentLevel = getUpgradeLevel(upgradeId)
-		local requirement = upgradeRequirements[upgradeId] or 0
-		local storageTier = UpgradeConfig.GetStorageTier(playerState.upgrades or {})
-		local nextCost = UpgradeConfig.getUpgradeCost(upgradeId, currentLevel)
-		local atMax = currentLevel >= upgrade.maxLevel
-		local hasStorage = storageTier >= requirement
-		local hasData = typeof(playerState.data) == "number" and nextCost and playerState.data >= nextCost
-
-		if cardEntry.levelLabel then
-			cardEntry.levelLabel.Text = string.format("Level %d / %d", currentLevel, upgrade.maxLevel)
-		end
-
-		if cardEntry.effectLabel then
-			cardEntry.effectLabel.Text = buildEffectText(upgrade, currentLevel)
-		end
-
-		if cardEntry.costLabel then
-			if atMax then
-				cardEntry.costLabel.Text = "Maxed"
-			elseif upgrade.branch == "STORAGE" and currentLevel >= 1 then
-				cardEntry.costLabel.Text = "UNLOCKED"
-			elseif nextCost then
-				cardEntry.costLabel.Text = string.format("Cost: %s", formatNumber(nextCost))
-			end
-		end
-
-		if upgrade.branch == "STORAGE" then
-			stylizeStorageCard(cardEntry.card, currentLevel >= 1)
-		end
-
-		local buttonStateText = "BUY"
-		local enabled = true
-
-		if atMax then
-			enabled = false
-			buttonStateText = "MAX"
-		elseif upgrade.branch == "STORAGE" and currentLevel >= 1 then
-			enabled = false
-			buttonStateText = "UNLOCKED"
-		elseif not hasStorage then
-			enabled = false
-			buttonStateText = "LOCKED"
-		elseif not hasData then
-			enabled = false
-			buttonStateText = "LOCKED"
-		end
-
-		setButtonState(cardEntry.buyButton, enabled, buttonStateText)
-	end
-
-	local function refreshAllUpgradeCards()
-		for upgradeId in pairs(upgradeCards) do
-			refreshUpgradeCard(upgradeId)
-		end
-
-		local currentTier = UpgradeConfig.GetStorageTier(playerState.upgrades or {})
-		setPrestigeState(currentTier >= 3)
-	end
-
-	local syncStateFromServer
-
-	local function handleBuyUpgrade(upgradeId)
-		if not buyUpgradeEvent then
-			warn("[TerminalClient] Buy upgrade remote missing")
-			return
-		end
-
-		buyUpgradeEvent:FireServer(upgradeId)
-		task.delay(0.25, function()
-			refreshUpgradeCard(upgradeId)
-			updateStats()
-			syncStateFromServer(true)
-		end)
-	end
-
-	local function handlePrestige()
-		if not prestigeEvent then
-			warn("[TerminalClient] Prestige remote missing")
-			return
-		end
-
-		prestigeEvent:FireServer()
-		task.delay(0.4, function()
-			syncStateFromServer(true)
-		end)
-	end
-
-	local function sanitizeState(state)
-		local sanitized = {
-			data = typeof(state.data) == "number" and state.data or 0,
-			upgrades = typeof(state.upgrades) == "table" and state.upgrades or {},
-			prestige = typeof(state.prestige) == "number" and state.prestige or 0,
-			corePower = typeof(state.corePower) == "number" and state.corePower or 0,
-		}
-
-		return sanitized
-	end
-
-	local function applyState(newState, shouldHighlight)
-		playerState = sanitizeState(newState)
-		predictedData = playerState.data
-		displayedData = playerState.data
-
-		local serverDps = typeof(newState.dps) == "number" and newState.dps or calculateClientDps()
-		lastKnownDps = serverDps
-
-		updateStats()
-		refreshAllUpgradeCards()
-
-		local tier = UpgradeConfig.GetStorageTier(playerState.upgrades or {})
-		if shouldHighlight then
-			applyStorageTierHighlights(tier)
-		else
-			lastKnownTier = tier
-		end
-	end
-
-	syncStateFromServer = function(shouldHighlight)
-		if syncInProgress or not requestSync then
-			return
-		end
-
-		syncInProgress = true
-		task.spawn(function()
-			local ok, result = pcall(function()
-				return requestSync:InvokeServer()
-			end)
-			syncInProgress = false
-
-			if not ok then
-				warn("[TerminalClient] RequestSync failed", result)
-				setSaveStatus("offline")
-				return
-			end
-
-			if typeof(result) ~= "table" then
-				warn("[TerminalClient] Invalid sync payload")
-				return
-			end
-
-			applyState(result, shouldHighlight)
-		end)
-	end
-
-	local function createUpgradeCard(upgrade, parentFolder)
-		if not template or not parentFolder then
-			return
-		end
-
-		local card = template:Clone()
-		card.Visible = true
-		card.Name = upgrade.id
-		card.Parent = parentFolder
-
-		local titleLabel = card:FindFirstChild("Title")
-		if titleLabel then
-			titleLabel.Text = upgrade.name
-		end
-
-		local descriptionLabel = card:FindFirstChild("Description")
-		if descriptionLabel then
-			descriptionLabel.Text = upgrade.description
-		end
-
-		local buyButton = card:FindFirstChild("BuyButton")
-		if buyButton then
-			applyHoverEffects(buyButton)
-			buyButton.MouseButton1Click:Connect(function()
-				handleBuyUpgrade(upgrade.id)
-			end)
-		end
-
-		if upgrade.branch == "STORAGE" then
-			stylizeStorageCard(card, false)
-		end
-
-		upgradeCards[upgrade.id] = {
-			card = card,
-			definition = upgrade,
-			buyButton = buyButton,
-			costLabel = card:FindFirstChild("CostLabel"),
-			levelLabel = card:FindFirstChild("LevelLabel"),
-			effectLabel = card:FindFirstChild("EffectLabel"),
-		}
-	end
-
-	for _, upgrade in ipairs(UpgradeConfig.GetUpgradesByBranch("CPU")) do
-		createUpgradeCard(upgrade, cpuCardsFolder)
-	end
-
-	for _, upgrade in ipairs(UpgradeConfig.GetUpgradesByBranch("RAM")) do
-		createUpgradeCard(upgrade, ramCardsFolder)
-	end
-
-	for _, upgrade in ipairs(UpgradeConfig.GetUpgradesByBranch("STORAGE")) do
-		createUpgradeCard(upgrade, stoCardsFolder)
-	end
-
-	if prestigeButton then
-		applyHoverEffects(prestigeButton)
-		prestigeButton.MouseButton1Click:Connect(handlePrestige)
-	end
-
-	if saveStatusEvent then
-		local ok, err = pcall(function()
-			saveStatusEvent.OnClientEvent:Connect(function(state)
-				local successState, callbackErr = pcall(function()
-					setSaveStatus(state)
-				end)
-
-				if not successState then
-					warn("[TerminalClient] Failed to handle save status", callbackErr)
-				end
-			end)
-		end)
-
-		if not ok then
-			warn("[TerminalClient] Failed to bind SaveStatus event", err)
-		end
-	else
-		warn("[TerminalClient] SaveStatus remote missing")
-		setSaveStatus("offline")
-	end
-
-	syncStateFromServer(false)
-
-	local syncInterval = 6
-	local syncTimer = 0
-
-	RunService.RenderStepped:Connect(function(dt)
-		predictedData += math.max(lastKnownDps, 0) * dt
-		displayedData = lerpNumber(displayedData, predictedData, math.clamp(dt * 4, 0, 1))
-		dataValueLabel.Text = formatNumber(displayedData)
-
-		syncTimer += dt
-		if syncTimer >= syncInterval then
-			syncTimer = 0
-			syncStateFromServer(true)
-		end
-	end)
+	UpgradeController.Init({
+		UpgradeConfig = UpgradeConfig,
+		NumberFormatter = NumberFormatter,
+		RunService = RunService,
+		TweenService = TweenService,
+		template = template,
+		cpuCardsFolder = cpuCardsFolder,
+		ramCardsFolder = ramCardsFolder,
+		stoCardsFolder = stoCardsFolder,
+		dataValueLabel = dataValueLabel,
+		statsDpsValue = statsDpsValue,
+		statsPrestigeValue = statsPrestigeValue,
+		statsCorePowerValue = statsCorePowerValue,
+		systemCpuValue = systemCpuValue,
+		systemRamValue = systemRamValue,
+		systemStorageValue = systemStorageValue,
+		multBaseValue = multBaseValue,
+		multAddValue = multAddValue,
+		multUpgradeValue = multUpgradeValue,
+		multPrestigeValue = multPrestigeValue,
+		multPassValue = multPassValue,
+		multBoostValue = multBoostValue,
+		multFinalValue = multFinalValue,
+		prestigeButton = prestigeButton,
+		prestigeOverlay = prestigeOverlay,
+		requestSync = requestSync,
+		buyUpgradeEvent = buyUpgradeEvent,
+		prestigeEvent = prestigeEvent,
+		saveStatusEvent = saveStatusEvent,
+		toastLabel = toastLabel,
+		MarketplaceService = game:GetService("MarketplaceService"),
+		Players = Players,
+		player = player,
+		onSync = handleSync,
+	})
 end)
 
 if not success then

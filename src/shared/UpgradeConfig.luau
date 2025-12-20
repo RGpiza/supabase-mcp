@@ -27,7 +27,6 @@ local function buildEffect(flatPerLevel, multiplierPerLevel, storageTierValue)
 end
 
 UpgradeConfig.Definitions = {
-	-- CPU Branch
 	{
 		id = "cpu_1",
 		branch = "CPU",
@@ -36,6 +35,9 @@ UpgradeConfig.Definitions = {
 		baseCost = 10,
 		costScale = 1.35,
 		maxLevel = 25,
+		effectType = "add",
+		target = "dps",
+		value = 1,
 		effect = buildEffect(1, nil, nil),
 	},
 	{
@@ -46,6 +48,9 @@ UpgradeConfig.Definitions = {
 		baseCost = 250,
 		costScale = 1.45,
 		maxLevel = 20,
+		effectType = "add",
+		target = "dps",
+		value = 5,
 		effect = buildEffect(5, nil, nil),
 	},
 	{
@@ -56,10 +61,11 @@ UpgradeConfig.Definitions = {
 		baseCost = 2_500,
 		costScale = 1.6,
 		maxLevel = 15,
+		effectType = "add",
+		target = "dps",
+		value = 20,
 		effect = buildEffect(20, nil, nil),
 	},
-
-	-- RAM Branch
 	{
 		id = "ram_1",
 		branch = "RAM",
@@ -68,6 +74,9 @@ UpgradeConfig.Definitions = {
 		baseCost = 100,
 		costScale = 1.4,
 		maxLevel = 20,
+		effectType = "mul",
+		target = "dps",
+		value = 0.05,
 		effect = buildEffect(nil, 0.05, nil),
 	},
 	{
@@ -78,10 +87,11 @@ UpgradeConfig.Definitions = {
 		baseCost = 1_000,
 		costScale = 1.55,
 		maxLevel = 15,
+		effectType = "mul",
+		target = "dps",
+		value = 0.15,
 		effect = buildEffect(nil, 0.15, nil),
 	},
-
-	-- STORAGE Branch
 	{
 		id = "sto_1",
 		branch = "STORAGE",
@@ -90,6 +100,9 @@ UpgradeConfig.Definitions = {
 		baseCost = 5_000,
 		costScale = 1.0,
 		maxLevel = 1,
+		effectType = "unlock",
+		target = "storageTier",
+		value = 1,
 		effect = buildEffect(nil, nil, 1),
 	},
 	{
@@ -100,6 +113,9 @@ UpgradeConfig.Definitions = {
 		baseCost = 50_000,
 		costScale = 1.0,
 		maxLevel = 1,
+		effectType = "unlock",
+		target = "storageTier",
+		value = 2,
 		effect = buildEffect(nil, nil, 2),
 	},
 	{
@@ -110,6 +126,9 @@ UpgradeConfig.Definitions = {
 		baseCost = 500_000,
 		costScale = 1.0,
 		maxLevel = 1,
+		effectType = "unlock",
+		target = "storageTier",
+		value = 3,
 		effect = buildEffect(nil, nil, 3),
 	},
 }

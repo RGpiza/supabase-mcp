@@ -34,6 +34,7 @@ local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionService = require(script.Parent.ProductionService)
 local UpgradeService = require(script.Parent.UpgradeService)
 local PrestigeService = require(script.Parent.PrestigeService)
+local MonetizationService = require(script.Parent.MonetizationService)
 
 local activePlayers = {}
 local productionLoopStarted = false
@@ -99,6 +100,7 @@ end
 
 local function addPlayer(player)
 	PlayerDataService.InitPlayer(player)
+	MonetizationService.ApplyPasses(player)
 	activePlayers[player] = true
 	startAutosave(player)
 end
@@ -125,7 +127,6 @@ local function applyProduction(player, deltaTime)
 		return nil, nil
 	end
 
-	-- Accumulate DPS using delta time so production remains smooth and frame-rate independent.
 	local added = dps * deltaTime
 	playerData.data = math.max((playerData.data or 0) + added, 0)
 	PlayerDataService.Set(player, playerData)
@@ -184,7 +185,38 @@ requestSync.OnServerInvoke = function(player)
 		return nil
 	end
 
-	return table.clone(data)
+	MonetizationService.ApplyPasses(player)
+
+	local production = ProductionService.ComputeFinalProduction(data)
+	local boostActive = MonetizationService.IsBoostActive(data)
+	local system = ProductionService.GetSystemStats(data.upgrades or {})
+	local breakdown = production.breakdown or {}
+
+	return {
+		data = data.data,
+		upgrades = data.upgrades,
+		prestige = data.prestige,
+		corePower = data.corePower,
+		owns2xData = data.owns2xData,
+		ownsFasterAuto = data.ownsFasterAuto,
+		passes = data.passes,
+		boostActive = boostActive,
+		boostExpiresAt = data.boostExpiresAt,
+		boostEnd = data.boostEnd,
+		production = {
+			base = production.baseDps,
+			add = breakdown.additive,
+			mulUpgrade = breakdown.upgradeMul,
+			mulPrestige = breakdown.prestigeMul,
+			mulPass = breakdown.passMul,
+			mulBoost = breakdown.boostMul,
+			final = production.finalDps,
+		},
+		system = system,
+		baseDps = production.baseDps,
+		finalDps = production.finalDps,
+		multiplierBreakdown = production.breakdown,
+	}
 end
 
 buyUpgradeEvent.OnServerEvent:Connect(function(player, upgradeId)

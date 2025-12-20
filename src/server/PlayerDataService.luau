@@ -11,6 +11,15 @@ local defaultData = {
 	upgrades = {},
 	prestige = 0,
 	corePower = 0,
+	owns2xData = false,
+	ownsFasterAuto = false,
+	boostExpiresAt = 0,
+	boostEnd = 0,
+	passes = {
+		x2Data = false,
+		fasterAuto = false,
+	},
+	receiptIds = {},
 }
 
 local playerCache = {}
@@ -43,6 +52,25 @@ local function sanitizeUpgrades(upgrades)
 	return cleaned
 end
 
+local function sanitizeReceipts(receipts)
+	if typeof(receipts) ~= "table" then
+		return {}
+	end
+	local cleaned = {}
+	for _, id in ipairs(receipts) do
+		if typeof(id) == "string" then
+			table.insert(cleaned, id)
+		end
+	end
+	if #cleaned > 50 then
+		local overflow = #cleaned - 50
+		for _ = 1, overflow do
+			table.remove(cleaned, 1)
+		end
+	end
+	return cleaned
+end
+
 local function sanitizeData(payload)
 	local sanitized = deepCopy(defaultData)
 
@@ -63,6 +91,46 @@ local function sanitizeData(payload)
 	if typeof(payload.corePower) == "number" then
 		sanitized.corePower = payload.corePower
 	end
+
+	if typeof(payload.owns2xData) == "boolean" then
+		sanitized.owns2xData = payload.owns2xData
+	end
+
+	if typeof(payload.ownsFasterAuto) == "boolean" then
+		sanitized.ownsFasterAuto = payload.ownsFasterAuto
+	end
+
+	if typeof(payload.passes) == "table" then
+		local passData = payload.passes
+		if typeof(passData.x2Data) == "boolean" then
+			sanitized.passes.x2Data = passData.x2Data
+		end
+		if typeof(passData.fasterAuto) == "boolean" then
+			sanitized.passes.fasterAuto = passData.fasterAuto
+		end
+	end
+
+	if typeof(payload.boostExpiresAt) == "number" then
+		sanitized.boostExpiresAt = payload.boostExpiresAt
+	end
+
+	if typeof(payload.boostEnd) == "number" then
+		sanitized.boostEnd = payload.boostEnd
+	end
+
+	if sanitized.owns2xData then
+		sanitized.passes.x2Data = true
+	end
+
+	if sanitized.ownsFasterAuto then
+		sanitized.passes.fasterAuto = true
+	end
+
+	local bestBoost = math.max(sanitized.boostExpiresAt or 0, sanitized.boostEnd or 0)
+	sanitized.boostExpiresAt = bestBoost
+	sanitized.boostEnd = bestBoost
+
+	sanitized.receiptIds = sanitizeReceipts(payload.receiptIds)
 
 	return sanitized
 end
