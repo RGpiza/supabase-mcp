@@ -1,260 +1,51 @@
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local AnalyticsService = game:GetService("AnalyticsService")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local UpgradeService = require(script.Parent.UpgradeService)
-local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
-local AutomationConfig = require(ReplicatedStorage.Shared.AutomationConfig)
+local UpgradeConfig = require(game:GetService("ReplicatedStorage").Shared.UpgradeConfig)
+local AutomationConfig = require(game:GetService("ReplicatedStorage").Shared.AutomationConfig)
 local SessionRewardService = require(script.Parent.SessionRewardService)
 
 local AutomationService = {}
 
-local BLOCK_TIMEOUT = 5
-local BASE_INTERVAL = 0.5
-local SUMMARY_INTERVAL = 120
+local CHECK_INTERVAL = 2
+local LOOP_STEP = 0.5
+local automationSettings = {}
 local automationById = {}
-local DEFAULT_PRIORITY = AutomationConfig.GetDefaultPriority()
-local maxSpeedTier = AutomationConfig.GetMaxSpeedTier()
-local presetSlotCount = AutomationConfig.GetPresetSlotCount()
-local playerSettingsCache = {}
+local automationOrder = {}
 local lastProcessTimes = {}
-local blockState = {}
-local analyticsByPlayer = {}
-local sessionStartTimes = {}
-local statePublisher = nil
-
-local BRANCH_SHORT_NAMES = {
-	CPU = "CPU",
-	RAM = "RAM",
-	STORAGE = "STO",
+local branchByAutomation = {
+	auto_cpu = "CPU",
+	auto_ram = "RAM",
 }
 
 for _, definition in ipairs(AutomationConfig.GetAll()) do
 	automationById[definition.id] = definition
-end
-
-local function sanitizePresetEntry(payload, fallback, allowRename)
-	local sanitized = {
-		name = fallback and fallback.name or string.format("Preset %d", math.random(1, 999)),
-		enabled = {},
-		priority = {},
-		speedTier = fallback and fallback.speedTier or 0,
-	}
-
-	if typeof(payload) == "table" then
-		if allowRename and typeof(payload.name) == "string" and payload.name ~= "" then
-			sanitized.name = string.sub(payload.name, 1, 24)
-		end
-
-		if typeof(payload.speedTier) == "number" then
-			sanitized.speedTier = math.clamp(math.floor(payload.speedTier + 0.5), 0, maxSpeedTier)
-		end
-	end
-
-	local enabledSource = typeof(payload) == "table" and typeof(payload.enabled) == "table" and payload.enabled or nil
-	if enabledSource then
-		for _, definition in ipairs(AutomationConfig.GetAll()) do
-			sanitized.enabled[definition.id] = enabledSource[definition.id] == true
-		end
-	elseif fallback and typeof(fallback.enabled) == "table" then
-		sanitized.enabled = table.clone(fallback.enabled)
-	else
-		for _, definition in ipairs(AutomationConfig.GetAll()) do
-			sanitized.enabled[definition.id] = false
-		end
-	end
-
-	local priorityList = {}
-	local prioritySource = typeof(payload) == "table" and typeof(payload.priority) == "table" and payload.priority or nil
-	if prioritySource then
-		for _, automationId in ipairs(prioritySource) do
-			if automationById[automationId] and not table.find(priorityList, automationId) then
-				table.insert(priorityList, automationId)
-			end
-		}
-	elseif fallback and typeof(fallback.priority) == "table" then
-		for _, automationId in ipairs(fallback.priority) do
-			if automationById[automationId] and not table.find(priorityList, automationId) then
-				table.insert(priorityList, automationId)
-			end
-		end
-	end
-
-	for _, definition in ipairs(AutomationConfig.GetAll()) do
-		if not table.find(priorityList, definition.id) then
-			table.insert(priorityList, definition.id)
-		end
-	end
-
-	sanitized.priority = priorityList
-	return sanitized
-end
-
-local function sanitizePresets(presets)
-	local stored = {}
-	local defaults = AutomationConfig.GetDefaultPresets()
-
-	for index = 1, presetSlotCount do
-		local incoming = typeof(presets) == "table" and presets[index] or nil
-		stored[index] = sanitizePresetEntry(incoming, defaults[index], true)
-	end
-
-	return stored
-end
-
-local function sanitizeSettings(settings)
-	local sanitized = {
-		enabled = {},
-		priority = {},
-		speedTier = 0,
-		presets = AutomationConfig.GetDefaultPresets(),
-	}
-
-	if typeof(settings) == "table" then
-		if typeof(settings.enabled) == "table" then
-			for automationId, value in settings.enabled do
-				if automationById[automationId] then
-					sanitized.enabled[automationId] = value == true
-				end
-			end
-		end
-
-		if typeof(settings.priority) == "table" then
-			for _, automationId in ipairs(settings.priority) do
-				if automationById[automationId] and not table.find(sanitized.priority, automationId) then
-					table.insert(sanitized.priority, automationId)
-				end
-			end
-		end
-
-		if typeof(settings.speedTier) == "number" then
-			sanitized.speedTier = math.clamp(math.floor(settings.speedTier + 0.5), 0, maxSpeedTier)
-		end
-
-		if typeof(settings.presets) == "table" then
-			sanitized.presets = sanitizePresets(settings.presets)
-		end
-	end
-
-	for _, automationId in ipairs(DEFAULT_PRIORITY) do
-		if not table.find(sanitized.priority, automationId) then
-			table.insert(sanitized.priority, automationId)
-		end
-	end
-
-	return sanitized
-end
-
-local function cloneSettings(settings)
-	local copy = {
-		speedTier = settings.speedTier or 0,
-		enabled = {},
-		priority = {},
-		presets = {},
-	}
-
-	for automationId, value in pairs(settings.enabled or {}) do
-		copy.enabled[automationId] = value == true
-	end
-
-	if typeof(settings.priority) == "table" then
-		for _, automationId in ipairs(settings.priority) do
-			table.insert(copy.priority, automationId)
-		end
-	end
-
-	if typeof(settings.presets) == "table" then
-		for index, preset in ipairs(settings.presets) do
-			copy.presets[index] = {
-				name = typeof(preset.name) == "string" and preset.name or string.format("Preset %d", index),
-				speedTier = typeof(preset.speedTier) == "number" and preset.speedTier or 0,
-				enabled = table.clone(preset.enabled or {}),
-				priority = table.clone(preset.priority or {}),
-			}
-		end
-	end
-
-	return copy
-end
-
-local function clampPresetIndex(index)
-	local numeric = typeof(index) == "number" and math.floor(index + 0.5) or nil
-	if not numeric then
-		return nil
-	end
-	if numeric < 1 or numeric > presetSlotCount then
-		return nil
-	end
-	return numeric
-end
-
-local function clonePresetForClient(preset)
-	if typeof(preset) ~= "table" then
-		return nil
-	end
-
-	return {
-		name = preset.name,
-		enabled = table.clone(preset.enabled or {}),
-		priority = table.clone(preset.priority or {}),
-		speedTier = preset.speedTier or 0,
-	}
-end
-
-local function getAnalyticsState(player)
-	local state = analyticsByPlayer[player]
-	if state then
-		return state
-	end
-
-	state = {
-		purchases = 0,
-		spent = 0,
-		upgrades = 0,
-		stallCount = 0,
-		timeEnabled = 0,
-		enabledStart = nil,
-		lastSummary = time(),
-		toggleSnapshot = {},
-		prioritySignature = "",
-	}
-	analyticsByPlayer[player] = state
-	return state
+	table.insert(automationOrder, definition.id)
 end
 
 local function getPlayerSettings(player)
-	local cached = playerSettingsCache[player]
-	if cached then
-		return cached
+	local settings = automationSettings[player]
+	if not settings then
+		settings = {}
+		automationSettings[player] = settings
 	end
+	return settings
+end
 
-	local data = PlayerDataService.Get(player)
-	if typeof(data) ~= "table" then
-		return nil
+local function isAutomationEnabled(player, automation)
+	local settings = getPlayerSettings(player)
+	local value = settings[automation.id]
+	if value == nil then
+		return automation.enabledByDefault
 	end
-
-	local sanitized = sanitizeSettings(data.automation)
-	playerSettingsCache[player] = sanitized
-	return sanitized
+	return value
 end
 
 local function isAutomationUnlocked(playerData, automation)
-	if not automation then
-		return false
-	end
-
 	local requirements = automation.unlockRequirement
 	if not requirements then
 		return true
-	end
-
-	if requirements.prestigeLevel then
-		local prestige = typeof(playerData.prestige) == "number" and playerData.prestige or 0
-		if prestige < requirements.prestigeLevel then
-			return false
-		end
 	end
 
 	if requirements.storageTier then
@@ -267,36 +58,6 @@ local function isAutomationUnlocked(playerData, automation)
 	return true
 end
 
-local function getPriorityOrder(player, settings)
-	local order = {}
-	local source = settings and settings.priority
-	if typeof(source) == "table" then
-		for _, automationId in ipairs(source) do
-			if automationById[automationId] and not table.find(order, automationId) then
-				table.insert(order, automationId)
-			end
-		end
-	end
-
-	for _, automationId in ipairs(DEFAULT_PRIORITY) do
-		if not table.find(order, automationId) then
-			table.insert(order, automationId)
-		end
-	end
-
-	return order
-end
-
-local function getPrioritySignature(order)
-	local segments = {}
-	for _, automationId in ipairs(order) do
-		local definition = automationById[automationId]
-		local short = definition and BRANCH_SHORT_NAMES[definition.branch] or automationId
-		table.insert(segments, short)
-	end
-	return table.concat(segments, ">")
-end
-
 local function selectCheapestUpgrade(branch, playerData)
 	local definitions = UpgradeConfig.GetUpgradesByBranch(branch)
 	local owned = playerData.upgrades or {}
@@ -304,83 +65,26 @@ local function selectCheapestUpgrade(branch, playerData)
 
 	local choiceId
 	local choiceCost
- local stalled = true
 
 	for _, upgrade in ipairs(definitions) do
 		if not UpgradeConfig.IsMaxed(owned, upgrade.id) and UpgradeConfig.MeetsRequirements(owned, upgrade.id) then
 			local level = UpgradeConfig.GetLevel(owned, upgrade.id)
 			local cost = UpgradeConfig.GetCost(upgrade.id, level)
-			if typeof(cost) == "number" then
-				if currency >= cost then
-					if not choiceCost or cost < choiceCost then
-						choiceCost = cost
-						choiceId = upgrade.id
-						stalled = false
-					end
+			if typeof(cost) == "number" and currency >= cost then
+				if not choiceCost or cost < choiceCost then
+					choiceCost = cost
+					choiceId = upgrade.id
 				end
 			end
 		end
 	end
 
-	return choiceId, stalled and currency > 0
-end
-
-local function isBlocked(player)
-	local states = blockState[player]
-	if not states then
-		return false
-	end
-
-	local now = time()
-	for key, record in pairs(states) do
-		if record.active then
-			if now - (record.timestamp or 0) > BLOCK_TIMEOUT then
-				record.active = false
-			else
-				return true
-			end
-		end
-	end
-
-	return false
-end
-
-local function isAutomationEnabled(player, automationId)
-	local settings = getPlayerSettings(player)
-	if not settings then
-		return false
-	end
-
-	local flag = settings.enabled[automationId]
-	if flag == nil then
-		local definition = automationById[automationId]
-		return definition and definition.enabledByDefault or false
-	end
-
-	return flag == true
-end
-
-local function anyAutomationEnabled(settings)
-	if typeof(settings) ~= "table" or typeof(settings.enabled) ~= "table" then
-		return false
-	end
-
-	for automationId, value in pairs(settings.enabled) do
-		if value == true and automationById[automationId] then
-			return true
-		end
-	end
-
-	return false
+	return choiceId
 end
 
 local function tryAutomationPurchase(player, automationId, playerData)
 	local automation = automationById[automationId]
-	if not automation then
-		return playerData
-	end
-
-	if not isAutomationEnabled(player, automationId) then
+	if not automation or not isAutomationEnabled(player, automation) then
 		return playerData
 	end
 
@@ -388,251 +92,67 @@ local function tryAutomationPurchase(player, automationId, playerData)
 		return playerData
 	end
 
-	local branch = automation.branch
+	local branch = branchByAutomation[automationId]
 	if not branch then
 		return playerData
 	end
 
-	local upgradeId, stalled = selectCheapestUpgrade(branch, playerData)
+	local upgradeId = selectCheapestUpgrade(branch, playerData)
 	if not upgradeId then
-		if stalled then
-			local analytics = getAnalyticsState(player)
-			analytics.stallCount += 1
-		end
 		return playerData
 	end
 
-	local success, purchased, spent = UpgradeService.BuyMax(player, upgradeId)
-	if not success then
-		if stalled then
-			local analytics = getAnalyticsState(player)
-			analytics.stallCount += 1
-		end
-		return playerData
+	local success = UpgradeService.Buy(player, upgradeId)
+	if success then
+		return PlayerDataService.Get(player)
 	end
 
-	local updated = PlayerDataService.Get(player)
-	if purchased and purchased > 0 then
-		local analytics = getAnalyticsState(player)
-		analytics.purchases += 1
-		analytics.spent += math.max(spent or 0, 0)
-		analytics.upgrades += purchased
-	end
-
-	return updated
+	return playerData
 end
 
 local function processPlayerAutomation(player)
-	if isBlocked(player) then
-		return
-	end
-
 	local playerData = PlayerDataService.Get(player)
 	if typeof(playerData) ~= "table" then
 		return
 	end
 
-	local settings = getPlayerSettings(player)
-	if not settings then
-		return
-	end
-
-	for _, automationId in ipairs(getPriorityOrder(player, settings)) do
+	for _, automationId in ipairs(automationOrder) do
 		playerData = tryAutomationPurchase(player, automationId, playerData)
-		if typeof(playerData) ~= "table" then
-			break
-		end
 	end
-
-	local analytics = getAnalyticsState(player)
-	if anyAutomationEnabled(settings) then
-		if not analytics.enabledStart then
-			analytics.enabledStart = now or time()
-		end
-	else
-		analytics.enabledStart = nil
-	end
-end
-
-local function getBaseInterval(player, settings)
-	local interval = BASE_INTERVAL
-	local tier = settings and settings.speedTier or 0
-	if typeof(tier) == "number" and tier > 0 then
-		local tierInfo = AutomationConfig.GetSpeedTierInfo(tier)
-		if tierInfo and typeof(tierInfo.interval) == "number" and tierInfo.interval > 0 then
-			interval = math.max(tierInfo.interval, interval)
-		end
-	end
-
-	local multiplier = SessionRewardService.GetAutomationMultiplier(player)
-	if typeof(multiplier) ~= "number" or multiplier <= 0 then
-		multiplier = 1
-	end
-
-	return math.max(0.1, interval / multiplier)
 end
 
 local function automationLoop()
-	RunService.Heartbeat:Connect(function()
+	while true do
+		task.wait(LOOP_STEP)
 		local now = time()
-		for _, player in ipairs(Players:GetPlayers()) do
-			local settings = getPlayerSettings(player)
-			if settings then
-				local interval = getBaseInterval(player, settings)
+		for player in pairs(automationSettings) do
+			if player and player.Parent then
+				local multiplier = SessionRewardService.GetAutomationMultiplier(player)
+				if typeof(multiplier) ~= "number" or multiplier <= 0 then
+					multiplier = 1
+				end
+				local interval = CHECK_INTERVAL / multiplier
 				local last = lastProcessTimes[player]
 				if not last or (now - last) >= interval then
 					lastProcessTimes[player] = now
 					processPlayerAutomation(player)
 				end
+			else
+				automationSettings[player] = nil
+				lastProcessTimes[player] = nil
 			end
 		end
-	end)
-end
-
-local function persistSettings(player, settings)
-	PlayerDataService.Set(player, {
-		automation = cloneSettings(settings),
-	})
+	end
 end
 
 function AutomationService.SetEnabled(player, automationId, enabled)
-	if not automationById[automationId] then
-		return false
-	end
-
-	local settings = getPlayerSettings(player)
-	if not settings then
-		return false
-	end
-
-	settings.enabled[automationId] = enabled == true
-	persistSettings(player, settings)
-	return true
-end
-
-function AutomationService.SetPriority(player, ordered)
-	if typeof(ordered) ~= "table" then
-		return false
-	end
-
-	local settings = getPlayerSettings(player)
-	if not settings then
-		return false
-	end
-
-	local newOrder = {}
-	for _, automationId in ipairs(ordered) do
-		if automationById[automationId] and not table.find(newOrder, automationId) then
-			table.insert(newOrder, automationId)
-		end
-	end
-
-	for _, automationId in ipairs(DEFAULT_PRIORITY) do
-		if not table.find(newOrder, automationId) then
-			table.insert(newOrder, automationId)
-		end
-	end
-
-	settings.priority = newOrder
-	persistSettings(player, settings)
-	return true
-end
-
-function AutomationService.PurchaseSpeedTier(player)
-	local settings = getPlayerSettings(player)
-	if not settings then
-		return false, "locked"
-	end
-
-	local currentTier = settings.speedTier or 0
-	if currentTier >= maxSpeedTier then
-		return false, "max"
-	end
-
-	local nextTier = currentTier + 1
-	local nextInfo = AutomationConfig.GetSpeedTierInfo(nextTier)
-	local cost = nextInfo and nextInfo.cost or 0
-
-	local data = PlayerDataService.Get(player)
-	if typeof(data) ~= "table" then
-		return false, "locked"
-	end
-
-	local currency = typeof(data.data) == "number" and data.data or 0
-	if currency < cost then
-		return false, "poor"
-	end
-
-	data.data = currency - cost
-	settings.speedTier = nextTier
-	PlayerDataService.Set(player, {
-		data = data.data,
-		automation = cloneSettings(settings),
-	})
-
-	return true, nextTier
-end
-
-function AutomationService.SetBlockingFlag(player, key, value)
-	if key ~= "prestige" and key ~= "store" then
+	local automation = automationById[automationId]
+	if not automation then
 		return
 	end
 
-	blockState[player] = blockState[player] or {}
-	blockState[player][key] = {
-		active = value == true,
-		timestamp = time(),
-	}
-end
-
-local function buildAutomationEntries(player, settings)
-	local playerData = PlayerDataService.Get(player)
-	local entries = {}
-	for _, definition in ipairs(AutomationConfig.GetAll()) do
-		local unlocked = typeof(playerData) == "table" and isAutomationUnlocked(playerData, definition) or false
-		table.insert(entries, {
-			id = definition.id,
-			name = definition.name,
-			description = definition.description,
-			branch = definition.branch,
-			enabled = settings.enabled[definition.id] == true,
-			unlocked = unlocked,
-			unlockRequirement = definition.unlockRequirement,
-		})
-	end
-	return entries
-end
-
-function AutomationService.GetClientState(player)
 	local settings = getPlayerSettings(player)
-	if not settings then
-		return nil
-	end
-
-	local entries = buildAutomationEntries(player, settings)
-	local order = getPriorityOrder(player, settings)
-	local tier = settings.speedTier or 0
-	local tierInfo = AutomationConfig.GetSpeedTierInfo(tier)
-	local nextTier = math.min(tier + 1, maxSpeedTier)
-	local canUpgrade = nextTier > tier
-	local nextInfo = AutomationConfig.GetSpeedTierInfo(nextTier)
-	local data = PlayerDataService.Get(player)
-	local currency = typeof(data) == "table" and typeof(data.data) == "number" and data.data or 0
-
-	return {
-		automations = entries,
-		priority = order,
-		speed = {
-			tier = tier,
-			interval = tierInfo and tierInfo.interval or 0.5,
-			nextTier = canUpgrade and nextTier or tier,
-			nextInterval = canUpgrade and nextInfo and nextInfo.interval or nil,
-			cost = canUpgrade and nextInfo and nextInfo.cost or 0,
-			canUpgrade = canUpgrade,
-			canAfford = canUpgrade and currency >= (nextInfo and nextInfo.cost or 0) or false,
-			maxTier = maxSpeedTier,
-		},
-	}
+	settings[automationId] = enabled and true or false
 end
 
 function AutomationService.Init()
@@ -642,21 +162,19 @@ function AutomationService.Init()
 	AutomationService._initialized = true
 
 	Players.PlayerAdded:Connect(function(player)
-		playerSettingsCache[player] = nil
 		getPlayerSettings(player)
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)
-		playerSettingsCache[player] = nil
+		automationSettings[player] = nil
 		lastProcessTimes[player] = nil
-		blockState[player] = nil
 	end)
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		getPlayerSettings(player)
 	end
 
-	automationLoop()
+	task.spawn(automationLoop)
 end
 
 return AutomationService

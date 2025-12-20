@@ -1,8 +1,0 @@
-{
-    "editor.defaultFormatter": "actboy168.lua-debug",
-    "editor.wordWrap": "off"
-    ,
-  "files.associations": {
-    "*": "lua"
-  }
-}
