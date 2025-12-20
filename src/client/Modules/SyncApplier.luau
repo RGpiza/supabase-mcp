@@ -46,8 +46,8 @@ function SyncApplier.Apply(payload, context)
 	if context.updateAutoBuyRecommendation then
 		context.updateAutoBuyRecommendation(context.autoBuyContext)
 	end
-	if context.rebindUpgrades then
-		context.rebindUpgrades(payload)
+	if context.afterApply then
+		context.afterApply(payload)
 	end
 
 	return true

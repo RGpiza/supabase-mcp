@@ -1575,10 +1575,14 @@ local function buildUpgradeCards(context)
 	local stoCards = context.stoCards
 	local upgradeConfig = context.upgradeConfig
 	local purchaseHandlerBinder = context.purchaseHandlerBinder
+	local bindCard = context.bindCard
 	local yieldEvery = typeof(context.yieldEvery) == "number" and context.yieldEvery or 0
 	local onBuilt = context.onBuilt
 
 	local builtCount = 0
+	local builtCpu = 0
+	local builtRam = 0
+	local builtSto = 0
 	local function createCard(definition, parentFolder)
 		if not parentFolder then
 			return
@@ -1587,6 +1591,14 @@ local function buildUpgradeCards(context)
 		card.Name = definition.id
 		card.Parent = parentFolder
 		card.Visible = true
+		if card:GetAttribute("UpgradeId") == nil then
+			card:SetAttribute("UpgradeId", definition.id)
+		end
+		card.AncestryChanged:Connect(function(_, parent)
+			if parent and bindCard and typeof(bindCard) == "function" then
+				bindCard(card)
+			end
+		end)
 
 		local title = card:FindFirstChild("Title") or card:FindFirstChild("CardTitle")
 		local description = card:FindFirstChild("Description") or card:FindFirstChild("CardDesc")
@@ -1597,6 +1609,9 @@ local function buildUpgradeCards(context)
 			if purchaseHandlerBinder and typeof(purchaseHandlerBinder.Bind) == "function" then
 				purchaseHandlerBinder.Bind(button, definition.id)
 			end
+		end
+		if bindCard and typeof(bindCard) == "function" then
+			bindCard(card)
 		end
 
 		upgradeCards[definition.id] = {
@@ -1613,6 +1628,13 @@ local function buildUpgradeCards(context)
 		for _, definition in ipairs(upgradeConfig.GetUpgradesByBranch(branchName)) do
 			createCard(definition, parentFolder)
 			builtCount += 1
+			if branchName == "CPU" then
+				builtCpu += 1
+			elseif branchName == "RAM" then
+				builtRam += 1
+			elseif branchName == "STORAGE" then
+				builtSto += 1
+			end
 			if yieldEvery > 0 and builtCount % yieldEvery == 0 then
 				task.wait()
 			end
@@ -1622,6 +1644,8 @@ local function buildUpgradeCards(context)
 	buildBranch("CPU", cpuCards)
 	buildBranch("RAM", ramCards)
 	buildBranch("STORAGE", stoCards)
+
+	print(("[TerminalClient] Upgrade cards created: CPU=%d RAM=%d STORAGE=%d"):format(builtCpu, builtRam, builtSto))
 
 	if typeof(onBuilt) == "function" then
 		onBuilt()
@@ -1795,8 +1819,15 @@ local function setupRuntimeSystems(args)
 	local cardsResolvedWarned = false
 	local function resolveCardContainers()
 		local screenGui = ui.screenGui
+		local rootFromGui = screenGui and (screenGui:FindFirstChild("Root") or screenGui:FindFirstChild("Root", true))
+		local safeAreaFromGui = rootFromGui and rootFromGui:FindFirstChild("SafeArea")
+		local mainFromGui = safeAreaFromGui and safeAreaFromGui:FindFirstChild("Main")
+		local columnsFromGui = mainFromGui and mainFromGui:FindFirstChild("Columns")
 		if not columns and main then
 			columns = safeFind(main, "Columns") or main:FindFirstChild("Columns", true)
+		end
+		if not columns and columnsFromGui then
+			columns = columnsFromGui
 		end
 		if not columns and screenGui then
 			columns = screenGui:FindFirstChild("Columns", true)
@@ -1808,6 +1839,12 @@ local function setupRuntimeSystems(args)
 			rightPanel = screenGui:FindFirstChild("RightPanel", true)
 		end
 		if columns then
+			local cpuColumn = columns:FindFirstChild("CPUColumn") or columns:FindFirstChild("CPUColumn", true)
+			local ramColumn = columns:FindFirstChild("RAMColumn") or columns:FindFirstChild("RAMColumn", true)
+			local stoColumn = columns:FindFirstChild("STOColumn") or columns:FindFirstChild("STOColumn", true)
+			cpuCards = cpuCards or (cpuColumn and cpuColumn:FindFirstChild("Cards_CPU", true))
+			ramCards = ramCards or (ramColumn and ramColumn:FindFirstChild("Cards_RAM", true))
+			stoCards = stoCards or (stoColumn and stoColumn:FindFirstChild("Cards_STORAGE", true))
 			cpuCards = cpuCards or columns:FindFirstChild("Cards_CPU", true)
 			ramCards = ramCards or columns:FindFirstChild("Cards_RAM", true)
 			stoCards = stoCards or columns:FindFirstChild("Cards_STORAGE", true)
@@ -2558,6 +2595,10 @@ local function setupRuntimeSystems(args)
 	local upgradeCardsBuildStarted = false
 	local upgradeCardsTemplateWarned = false
 	local upgradeCardsRetryCount = 0
+	local bindUpgradeCard = nil
+	local cardContainerWatchersAttached = false
+	local upgradeRenderExecuted = false
+	local upgradeRenderDiagLogged = false
 	local coreSystemsStarted = false
 	local syncLoopStarted = false
 	local syncLoopWarningIssued = false
@@ -2572,6 +2613,167 @@ local function setupRuntimeSystems(args)
 				or playerGui:FindFirstChild("UpgradeCardTemplate", true)
 		end
 		return nil
+	end
+
+	local function clearRenderedCards(container)
+		if not container then
+			return
+		end
+		for _, child in ipairs(container:GetChildren()) do
+			if child:IsA("GuiObject") and child:GetAttribute("RenderedUpgradeCard") == true then
+				child:Destroy()
+			end
+		end
+	end
+
+	local function countRenderedCards(container)
+		if not container then
+			return 0
+		end
+		local count = 0
+		for _, child in ipairs(container:GetChildren()) do
+			if child:IsA("GuiObject") and child:GetAttribute("RenderedUpgradeCard") == true then
+				count += 1
+			end
+		end
+		return count
+	end
+
+	local function renderUpgrades(payload)
+		upgradeRenderExecuted = true
+		resolveCardContainers()
+		if not (cpuCards and ramCards and stoCards) then
+			return
+		end
+		if countRenderedCards(cpuCards) + countRenderedCards(ramCards) + countRenderedCards(stoCards) > 0 then
+			return
+		end
+
+		local template = resolveUpgradeTemplate()
+		if not template then
+			return
+		end
+
+		clearRenderedCards(cpuCards)
+		clearRenderedCards(ramCards)
+		clearRenderedCards(stoCards)
+
+		local upgrades = UpgradeConfig and UpgradeConfig.GetAllUpgrades and UpgradeConfig.GetAllUpgrades() or {}
+		if #upgrades == 0 then
+			upgrades = {
+				{ id = "cpu_1", branch = "CPU", name = "CPU Upgrade", description = "Increase CPU power.", baseCost = 10, costScale = 1.25, maxLevel = 50 },
+				{ id = "ram_1", branch = "RAM", name = "RAM Upgrade", description = "Increase RAM efficiency.", baseCost = 20, costScale = 1.3, maxLevel = 30 },
+				{ id = "sto_1", branch = "STORAGE", name = "Storage Upgrade", description = "Increase storage tier.", baseCost = 50, costScale = 1.4, maxLevel = 10 },
+			}
+		end
+
+		local levels = payload and payload.upgrades or playerState.upgrades or {}
+		local renderedCpu = 0
+		local renderedRam = 0
+		local renderedSto = 0
+
+		if not cardContainerWatchersAttached then
+			cardContainerWatchersAttached = true
+			local function connectContainer(container)
+				if not container then
+					return
+				end
+				container.ChildAdded:Connect(function(child)
+					if child:IsA("UIListLayout") or child:IsA("UIPadding") or child:IsA("UIGridLayout") then
+						return
+					end
+					if child:IsA("GuiObject") then
+						local button = child:FindFirstChild("BuyButton", true) or child:FindFirstChild("CardBuyButton", true)
+						if button and button:IsA("GuiButton") then
+							child:SetAttribute("Bound", true)
+							if UpgradeBinder and type(UpgradeBinder.BindCard) == "function" then
+								UpgradeBinder.BindCard(child)
+							end
+						end
+					end
+				end)
+			end
+			connectContainer(cpuCards)
+			connectContainer(ramCards)
+			connectContainer(stoCards)
+		end
+
+		for _, def in ipairs(upgrades) do
+			local branch = def.branch
+			local parentFolder = nil
+			if branch == "CPU" then
+				parentFolder = cpuCards
+			elseif branch == "RAM" then
+				parentFolder = ramCards
+			elseif branch == "STORAGE" then
+				parentFolder = stoCards
+			else
+				parentFolder = cpuCards
+			end
+			if parentFolder then
+				local card = template:Clone()
+				card.Name = def.id
+				card.Parent = parentFolder
+				card.Visible = true
+				card:SetAttribute("RenderedUpgradeCard", true)
+				card:SetAttribute("UpgradeId", def.id)
+
+				local title = card:FindFirstChild("Title") or card:FindFirstChild("CardTitle")
+				if title and title:IsA("TextLabel") then
+					title.Text = def.name or def.id
+				end
+				local description = card:FindFirstChild("Description") or card:FindFirstChild("CardDesc")
+				if description and description:IsA("TextLabel") then
+					description.Text = def.description or ""
+				end
+				local costLabel = card:FindFirstChild("CostLabel") or card:FindFirstChild("CardCostLabel")
+				if costLabel and costLabel:IsA("TextLabel") and UpgradeConfig and UpgradeConfig.GetCost then
+					local currentLevel = typeof(levels) == "table" and levels[def.id] or 0
+					local nextCost = UpgradeConfig.GetCost(def.id, currentLevel)
+					if typeof(nextCost) == "number" then
+						costLabel.Text = "Cost: " .. NumberFormatter.format(nextCost)
+					end
+				end
+
+				if bindUpgradeCard then
+					bindUpgradeCard(card)
+				end
+
+				if branch == "CPU" then
+					renderedCpu += 1
+				elseif branch == "RAM" then
+					renderedRam += 1
+				elseif branch == "STORAGE" then
+					renderedSto += 1
+				end
+			end
+		end
+
+		print(("[TerminalClient] Rendered CPU=%d RAM=%d STORAGE=%d"):format(renderedCpu, renderedRam, renderedSto))
+		if UpgradeBinder and type(UpgradeBinder.EnsureBindings) == "function" then
+			UpgradeBinder.EnsureBindings()
+		elseif UpgradeBinder and type(UpgradeBinder.Init) == "function" then
+			UpgradeBinder.Init(payload)
+		end
+	end
+
+	local function logUpgradeRenderDiagnostics()
+		if upgradeRenderDiagLogged then
+			return
+		end
+		upgradeRenderDiagLogged = true
+		local template = resolveUpgradeTemplate()
+		local cpuCount = cpuCards and #cpuCards:GetChildren() or 0
+		local ramCount = ramCards and #ramCards:GetChildren() or 0
+		local stoCount = stoCards and #stoCards:GetChildren() or 0
+		print("[UpgradeDiagnostics] TemplateExists=" .. tostring(template ~= nil))
+		print("[UpgradeDiagnostics] Cards_CPU children=" .. tostring(cpuCount))
+		print("[UpgradeDiagnostics] Cards_RAM children=" .. tostring(ramCount))
+		print("[UpgradeDiagnostics] Cards_STORAGE children=" .. tostring(stoCount))
+		print("[UpgradeDiagnostics] RendererExecuted=" .. tostring(upgradeRenderExecuted))
+		if (cpuCount + ramCount + stoCount) == 0 then
+			warn("[UpgradeDiagnostics] No upgrade cards parented into Cards_*; upgrades cannot appear.")
+		end
 	end
 
 	local function buildUpgradeCardsAsync()
@@ -2608,8 +2810,14 @@ local function setupRuntimeSystems(args)
 				stoCards = stoCards,
 				upgradeConfig = UpgradeConfig,
 				purchaseHandlerBinder = PurchaseHandlerBinder,
+				bindCard = bindUpgradeCard,
 				yieldEvery = 6,
-				onBuilt = refreshAllCards,
+				onBuilt = function()
+					refreshAllCards()
+					if UpgradeBinder and type(UpgradeBinder.EnsureBindings) == "function" then
+						UpgradeBinder.EnsureBindings()
+					end
+				end,
 			})
 		end)
 	end
@@ -2883,6 +3091,11 @@ local function setupRuntimeSystems(args)
 			end,
 		}
 	end
+	bindUpgradeCard = function(card)
+		if UpgradeBinder and type(UpgradeBinder.BindCard) == "function" then
+			UpgradeBinder.BindCard(card)
+		end
+	end
 	if type(UpgradeBinder.SetContext) == "function" then
 		UpgradeBinder.SetContext({
 			buildUpgradeCardsAsync = buildUpgradeCardsAsync,
@@ -2905,10 +3118,12 @@ local function setupRuntimeSystems(args)
 		applyContext.refreshAllCards = refreshAllCards
 		applyContext.updateAutoBuyRecommendation = updateAutoBuyRecommendation
 		applyContext.autoBuyContext = autoBuyContext
-		applyContext.rebindUpgrades = function(payload)
-			if UpgradeBinder and type(UpgradeBinder.Init) == "function" then
-				UpgradeBinder.Init(payload)
+		applyContext.afterApply = function(payload)
+			if UpgradeBinder and type(UpgradeBinder.EnsureBindings) == "function" then
+				UpgradeBinder.EnsureBindings(payload)
 			end
+			renderUpgrades(payload)
+			logUpgradeRenderDiagnostics()
 		end
 		applyContext.activateCoreSystems = function(payload)
 			if coreSystemsStarted then
