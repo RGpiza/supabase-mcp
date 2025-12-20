@@ -392,7 +392,7 @@ function ToastController.Init(context)
 
 	local toastCooldown = false
 
-	local function showToast(message, textColor)
+	local function showToast(message)
 		if not toastArea then
 			return
 		end
@@ -404,7 +404,7 @@ function ToastController.Init(context)
 		local toast = Instance.new("TextLabel")
 		toast.Name = "Toast"
 		toast.BackgroundTransparency = 1
-		toast.TextColor3 = textColor or Color3.new(1, 1, 1)
+		toast.TextColor3 = Color3.new(1, 1, 1)
 		toast.TextStrokeTransparency = 0.5
 		toast.Font = Enum.Font.GothamBold
 		toast.TextSize = 20

@@ -16,13 +16,11 @@ local defaultData = {
 	boosts = {},
 	ownedPasses = {},
 	lastSeen = 0,
-	globalMilestones = {},
 }
 
 local playerCache = {}
 local dataStore = DataStoreService:GetDataStore(DATASTORE_NAME)
 local listenersInitialized = false
-local afterSetListeners = {}
 
 local function deepCopy(source)
 	local target = {}
@@ -106,36 +104,6 @@ local function sanitizeOwnedPasses(passes)
 	return cleaned
 end
 
-local function sanitizeBooleanTable(source)
-	if typeof(source) ~= "table" then
-		return {}
-	end
-
-	local cleaned = {}
-	for key, value in source do
-		if typeof(key) == "string" and value ~= nil then
-			cleaned[key] = value == true
-		end
-	end
-	return cleaned
-end
-
-local function sanitizeGlobalMilestones(payload)
-	local sanitized = {}
-	if typeof(payload) ~= "table" then
-		sanitized.data = {}
-		sanitized.prestige = {}
-		sanitized.prestigeMultiples = {}
-		return sanitized
-	end
-
-	sanitized.data = sanitizeBooleanTable(payload.data)
-	sanitized.prestige = sanitizeBooleanTable(payload.prestige)
-	sanitized.prestigeMultiples = sanitizeBooleanTable(payload.prestigeMultiples)
-
-	return sanitized
-end
-
 local function sanitizeData(payload)
 	local sanitized = deepCopy(defaultData)
 
@@ -163,7 +131,6 @@ local function sanitizeData(payload)
 
 	sanitized.boosts = sanitizeBoosts(payload.boosts)
 	sanitized.ownedPasses = sanitizeOwnedPasses(payload.ownedPasses)
-	sanitized.globalMilestones = sanitizeGlobalMilestones(payload.globalMilestones)
 	if typeof(payload.lastSeen) == "number" then
 		sanitized.lastSeen = payload.lastSeen
 	else
@@ -221,15 +188,6 @@ local function saveDataWithRetries(userId, data)
 	return false, lastError
 end
 
-local function dispatchAfterSet(player, previousState, newState)
-	for _, callback in ipairs(afterSetListeners) do
-		local ok, err = pcall(callback, player, previousState, newState)
-		if not ok then
-			warn("[PlayerDataService] AfterSet listener failed:", err)
-		end
-	end
-end
-
 function PlayerDataService.InitPlayer(player)
 	local userId = tostring(player.UserId)
 	if playerCache[userId] then
@@ -258,10 +216,8 @@ function PlayerDataService.Set(player, newData)
 	end
 
 	local userId = tostring(player.UserId)
-	local previousState = playerCache[userId]
 	local merged = deepMerge(playerCache[userId] or defaultData, newData)
 	playerCache[userId] = sanitizeData(merged)
-	dispatchAfterSet(player, previousState, playerCache[userId])
 end
 
 function PlayerDataService.Save(player)
@@ -281,23 +237,6 @@ end
 function PlayerDataService.Release(player)
 	local userId = tostring(player.UserId)
 	playerCache[userId] = nil
-end
-
-function PlayerDataService.OnAfterSet(callback)
-	if typeof(callback) ~= "function" then
-		return function() end
-	end
-
-	table.insert(afterSetListeners, callback)
-
-	return function()
-		for index, stored in ipairs(afterSetListeners) do
-			if stored == callback then
-				table.remove(afterSetListeners, index)
-				break
-			end
-		end
-	end
 end
 
 local function setupListeners()

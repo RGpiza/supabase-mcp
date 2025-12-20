@@ -4,16 +4,13 @@ local PlayerDataService = require(script.Parent.PlayerDataService)
 local UpgradeService = require(script.Parent.UpgradeService)
 local UpgradeConfig = require(game:GetService("ReplicatedStorage").Shared.UpgradeConfig)
 local AutomationConfig = require(game:GetService("ReplicatedStorage").Shared.AutomationConfig)
-local SessionRewardService = require(script.Parent.SessionRewardService)
 
 local AutomationService = {}
 
 local CHECK_INTERVAL = 2
-local LOOP_STEP = 0.5
 local automationSettings = {}
 local automationById = {}
 local automationOrder = {}
-local lastProcessTimes = {}
 local branchByAutomation = {
 	auto_cpu = "CPU",
 	auto_ram = "RAM",
@@ -123,23 +120,12 @@ end
 
 local function automationLoop()
 	while true do
-		task.wait(LOOP_STEP)
-		local now = time()
+		task.wait(CHECK_INTERVAL)
 		for player in pairs(automationSettings) do
 			if player and player.Parent then
-				local multiplier = SessionRewardService.GetAutomationMultiplier(player)
-				if typeof(multiplier) ~= "number" or multiplier <= 0 then
-					multiplier = 1
-				end
-				local interval = CHECK_INTERVAL / multiplier
-				local last = lastProcessTimes[player]
-				if not last or (now - last) >= interval then
-					lastProcessTimes[player] = now
-					processPlayerAutomation(player)
-				end
+				processPlayerAutomation(player)
 			else
 				automationSettings[player] = nil
-				lastProcessTimes[player] = nil
 			end
 		end
 	end
@@ -167,7 +153,6 @@ function AutomationService.Init()
 
 	Players.PlayerRemoving:Connect(function(player)
 		automationSettings[player] = nil
-		lastProcessTimes[player] = nil
 	end)
 
 	for _, player in ipairs(Players:GetPlayers()) do
