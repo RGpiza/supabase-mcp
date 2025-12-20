@@ -2,7 +2,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
-local EconomyAnalytics = require(script.Parent.EconomyAnalytics)
 
 local PrestigeService = {}
 
@@ -49,43 +48,13 @@ function PrestigeService.Prestige(player)
 	local newMultiplier = currentMultiplier * PRESTIGE_MULTIPLIER
 	local newBonusUnits = math.max(((newMultiplier - 1) / PRESTIGE_UNIT), 0)
 
-	local prestigeLevel = (state.prestige or 0) + 1
-	local spentData = math.max(state.data or 0, 0)
-
 	state.data = 0
 	state.upgrades = {}
-	state.prestige = prestigeLevel
+	state.prestige = (state.prestige or 0) + 1
 	state.corePower = newBonusUnits
 
 	PlayerDataService.Set(player, state)
 	PlayerDataService.Save(player)
-
-	if spentData > 0 then
-		EconomyAnalytics.LogSink(
-			player,
-			spentData,
-			state.data,
-			Enum.AnalyticsEconomyTransactionType.Gameplay,
-			"Prestige_Reset",
-			{
-				PrestigeLevel = prestigeLevel,
-			}
-		)
-	end
-
-	local gainedCore = math.max(newBonusUnits - currentBonusUnits, 0)
-	if gainedCore > 0 then
-		EconomyAnalytics.LogSource(
-			player,
-			gainedCore,
-			state.corePower,
-			Enum.AnalyticsEconomyTransactionType.Gameplay,
-			"Prestige_CoreGain",
-			{
-				PrestigeLevel = prestigeLevel,
-			}
-		)
-	end
 
 	return true
 end
