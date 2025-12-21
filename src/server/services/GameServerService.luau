@@ -31,13 +31,35 @@ end
 local requestSync = ensureRemote("RemoteFunction", "RequestSync")
 local buyUpgradeEvent = ensureRemote("RemoteEvent", "RequestBuyUpgrade")
 local prestigeEvent = ensureRemote("RemoteEvent", "RequestPrestige")
+local requestPrestigeState = ensureRemote("RemoteFunction", "GetPrestigeState")
+local requestPrestigeNode = ensureRemote("RemoteFunction", "PurchasePrestigeNode")
+local requestPrestigePurchase = ensureRemote("RemoteFunction", "RequestPrestigePurchase")
 local requestLeaderboard = ensureRemote("RemoteFunction", "RequestLeaderboard")
 local saveStatusEvent = ensureRemote("RemoteEvent", "SaveStatus")
+local clientUxEvent = ensureRemote("RemoteEvent", "ClientUXEvent")
+local requestGlobalLikeState = ensureRemote("RemoteFunction", "GetGlobalLikeState")
+local requestLikeClaim = ensureRemote("RemoteFunction", "ClaimLikeReward")
+local requestFavoriteReward = ensureRemote("RemoteFunction", "RequestFavoriteReward")
+local requestCommunityState = ensureRemote("RemoteFunction", "GetCommunityState")
+local requestCommunityLikeClaim = ensureRemote("RemoteFunction", "ClaimLikeMilestone")
+local requestCommunityFavoriteClaim = ensureRemote("RemoteFunction", "ClaimFavoriteReward")
+local communityStateUpdated = ensureRemote("RemoteEvent", "CommunityStateUpdated")
+local requestSocialGoalsState = ensureRemote("RemoteFunction", "GetSocialGoalsState")
+local requestSocialGoalClaim = ensureRemote("RemoteFunction", "ClaimMilestone")
+local requestSocialForceRefresh = ensureRemote("RemoteFunction", "ForceSocialRefresh")
+local socialGoalsUpdated = ensureRemote("RemoteEvent", "SocialGoalsStateUpdated")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionService = require(script.Parent.ProductionService)
 local UpgradeService = require(script.Parent.UpgradeService)
 local PrestigeService = require(script.Parent.PrestigeService)
+local PrestigeNodeService = require(script.Parent.PrestigeNodeService)
+local PrestigeConfig = require(ReplicatedStorage.Shared.PrestigeConfig)
+local PrestigePointsService = require(script.Parent.PrestigePointsService)
+local AnalyticsTrackerService = require(script.Parent.AnalyticsTrackerService)
+local GlobalLikeGoalService = require(script.Parent.GlobalLikeGoalService)
+local FavoriteRewardService = require(script.Parent.FavoriteRewardService)
+local SocialGoalsService = require(script.Parent.SocialGoalsService)
 local MonetizationService = require(script.Parent.MonetizationService)
 local LeaderboardService = require(script.Parent.LeaderboardService)
 local DebugConfig = nil
@@ -54,6 +76,8 @@ local DEBUG_LEADERBOARD = false
 local activePlayers = {}
 local productionLoopStarted = false
 local autosaveFlags = {}
+local savingFlags = {}
+local autoUpgradeFlags = {}
 
 local AUTOSAVE_INTERVAL = 60
 local LEADERBOARD_LIMIT = 50
@@ -73,7 +97,9 @@ local function savePlayerWithStatus(player)
 		saveStatusEvent:FireClient(player, "saving")
 	end
 
+	savingFlags[player] = true
 	local success = PlayerDataService.Save(player)
+	savingFlags[player] = nil
 
 	if saveStatusEvent then
 		if success then
@@ -84,6 +110,62 @@ local function savePlayerWithStatus(player)
 	end
 
 	return success
+end
+
+local function runAutoUpgrades(player)
+	if autoUpgradeFlags[player] then
+		return
+	end
+	autoUpgradeFlags[player] = true
+
+	task.spawn(function()
+		while autoUpgradeFlags[player] do
+			local data = PlayerDataService.Get(player)
+			local tickMs = PrestigeConfig.AUTOMATION_TICK_MS_DEFAULT
+			if typeof(data) == "table" and typeof(data.automation) == "table" then
+				if typeof(data.automation.tickMs) == "number" then
+					tickMs = data.automation.tickMs
+				end
+			end
+			local autoSpeedLevel = 0
+			if typeof(data) == "table" then
+				autoSpeedLevel = PrestigePointsService.GetUpgradeLevel(data, "pp_auto_speed_1")
+			end
+			local autoSpeedMult = math.clamp(1 - (autoSpeedLevel * 0.05), 0.5, 1)
+			local autoMul = 0
+			if typeof(data) == "table" and typeof(data.automationMultiplier) == "number" then
+				autoMul = data.automationMultiplier
+			end
+			local effectiveTick = tickMs * math.clamp(1 - autoMul, 0.4, 1) * autoSpeedMult
+			task.wait(math.max(effectiveTick / 1000, 0.25))
+			if not autoUpgradeFlags[player] then
+				break
+			end
+			if not player or not player.Parent then
+				autoUpgradeFlags[player] = nil
+				break
+			end
+			data = PlayerDataService.Get(player)
+			if typeof(data) ~= "table" then
+				continue
+			end
+			local automation = typeof(data.automation) == "table" and data.automation or {}
+			local unlocks = typeof(data.unlocks) == "table" and data.unlocks or {}
+			local bypassLevel = PrestigePointsService.GetUpgradeLevel(data, "pp_auto_bypass_1")
+			if automation.enabled == false and bypassLevel <= 0 then
+				continue
+			end
+			if bypassLevel > 0 or unlocks.auto_cpu_1 or automation.cpuAuto then
+				UpgradeService.AutoBuyBest(player, "CPU")
+			end
+			if bypassLevel > 0 or unlocks.auto_ram_1 or automation.ramAuto then
+				UpgradeService.AutoBuyBest(player, "RAM")
+			end
+			if bypassLevel > 0 or unlocks.auto_sto_1 or automation.stoAuto then
+				UpgradeService.AutoBuyBest(player, "STORAGE")
+			end
+		end
+	end)
 end
 
 local function startAutosave(player)
@@ -123,6 +205,8 @@ local function addPlayer(player)
 	MonetizationService.ApplyPasses(player)
 	activePlayers[player] = true
 	startAutosave(player)
+	runAutoUpgrades(player)
+	AnalyticsTrackerService.OnPlayerAdded(player)
 	if data and typeof(data) == "table" then
 		LeaderboardService.EnsurePlayerEntry(player, data.data or 0)
 	else
@@ -133,6 +217,8 @@ end
 local function removePlayer(player)
 	activePlayers[player] = nil
 	stopAutosave(player)
+	autoUpgradeFlags[player] = nil
+	AnalyticsTrackerService.OnPlayerRemoving(player)
 	local cached = PlayerDataService.Get(player)
 	if cached and typeof(cached) == "table" then
 		LeaderboardService.UpdatePlayerStat(player, cached.data or 0)
@@ -194,7 +280,17 @@ local function applyProduction(player, deltaTime)
 
 	local added = dps * deltaTime
 	playerData.data = math.max((playerData.data or 0) + added, 0)
+	playerData.peakData = math.max((playerData.peakData or 0), playerData.data or 0)
+	playerData.dataEarnedThisRun = math.floor(math.max((playerData.dataEarnedThisRun or 0) + added, 0))
 	PlayerDataService.Set(player, playerData)
+	if playerData.data > 0 then
+		AnalyticsTrackerService.TrackFirstData(player)
+	end
+	AnalyticsTrackerService.AccumulateData(player, added, playerData.data, {
+		source = "Production",
+		boostActive = MonetizationService.IsBoostActive(playerData),
+		prestigeLevel = playerData.prestige or 0,
+	})
 
 	return dps, added
 end
@@ -262,8 +358,17 @@ requestSync.OnServerInvoke = function(player)
 
 	return {
 		data = data.data,
+		peakData = data.peakData,
+		dataEarnedThisRun = data.dataEarnedThisRun,
 		upgrades = data.upgrades,
 		prestige = data.prestige,
+		prestigePoints = data.prestigePoints,
+		ppSpent = data.ppSpent,
+		unlocks = data.unlocks,
+		automation = data.automation,
+		prestigeUpgrades = data.prestigeUpgrades,
+		prestigePointsNext = PrestigeService.CalculatePrestigePointsGain(data),
+		prestigeNextAt = PrestigeService.CalculateNextPrestigeThreshold(data),
 		corePower = data.corePower,
 		owns2xData = data.owns2xData,
 		ownsFasterAuto = data.ownsFasterAuto,
@@ -286,6 +391,176 @@ requestSync.OnServerInvoke = function(player)
 		multiplierBreakdown = production.breakdown,
 		leaderboard = leaderboard,
 	}
+end
+
+requestPrestigeState.OnServerInvoke = function(player)
+	if not player then
+		return nil
+	end
+	local data = PlayerDataService.Get(player)
+	if typeof(data) ~= "table" then
+		return nil
+	end
+	local state = PrestigeNodeService.GetState(player)
+	if not state then
+		return nil
+	end
+	state.prestigePointsNext = PrestigeService.CalculatePrestigePointsGain(data)
+	state.prestigeNextAt = PrestigeService.CalculateNextPrestigeThreshold(data)
+	return state
+end
+
+requestPrestigeNode.OnServerInvoke = function(player, nodeId)
+	if not player then
+		return nil
+	end
+	if savingFlags[player] or PrestigeService.IsPrestiging(player) then
+		return nil
+	end
+	local ok = PrestigeNodeService.Purchase(player, nodeId)
+	if not ok then
+		return nil
+	end
+	return PrestigeNodeService.GetState(player)
+end
+
+requestPrestigePurchase.OnServerInvoke = function(player, upgradeId)
+	if not player then
+		return nil
+	end
+	if savingFlags[player] or PrestigeService.IsPrestiging(player) then
+		return nil
+	end
+	local ok = PrestigePointsService.Purchase(player, upgradeId)
+	if not ok then
+		return nil
+	end
+	local data = PlayerDataService.Get(player)
+	if typeof(data) ~= "table" then
+		return nil
+	end
+	return {
+		prestigePoints = data.prestigePoints,
+		prestigeUpgrades = data.prestigeUpgrades,
+	}
+end
+
+requestGlobalLikeState.OnServerInvoke = function(player)
+	if not player then
+		return nil
+	end
+	return GlobalLikeGoalService.GetState(player)
+end
+
+requestLikeClaim.OnServerInvoke = function(player, milestoneId)
+	if not player then
+		return nil
+	end
+	local ok = GlobalLikeGoalService.Claim(player, milestoneId)
+	if not ok then
+		return nil
+	end
+	return GlobalLikeGoalService.GetState(player)
+end
+
+requestFavoriteReward.OnServerInvoke = function(player)
+	if not player then
+		return nil
+	end
+	local ok = FavoriteRewardService.Claim(player)
+	if not ok then
+		return nil
+	end
+	return FavoriteRewardService.GetState(player)
+end
+
+local function buildCommunityState(player)
+	local likeState = GlobalLikeGoalService.GetState(player) or {}
+	local favoriteState = FavoriteRewardService.GetState(player) or {}
+	return {
+		likes = likeState.globalLikes,
+		milestones = likeState.milestones or {},
+		favorite = favoriteState,
+	}
+end
+
+requestCommunityState.OnServerInvoke = function(player)
+	if not player then
+		return nil
+	end
+	return buildCommunityState(player)
+end
+
+requestCommunityLikeClaim.OnServerInvoke = function(player, milestoneId)
+	if not player then
+		return nil
+	end
+	local ok = GlobalLikeGoalService.Claim(player, milestoneId)
+	if not ok then
+		return nil
+	end
+	local state = buildCommunityState(player)
+	if communityStateUpdated then
+		communityStateUpdated:FireClient(player, state)
+	end
+	return state
+end
+
+requestCommunityFavoriteClaim.OnServerInvoke = function(player)
+	if not player then
+		return nil
+	end
+	local ok = FavoriteRewardService.Claim(player)
+	if not ok then
+		return nil
+	end
+	local state = buildCommunityState(player)
+	if communityStateUpdated then
+		communityStateUpdated:FireClient(player, state)
+	end
+	return state
+end
+
+local function buildSocialGoalsState(player)
+	local state = SocialGoalsService.GetState(player)
+	local favorite = FavoriteRewardService.GetState(player)
+	if typeof(state) == "table" then
+		state.favorite = favorite
+	end
+	return state
+end
+
+requestSocialGoalsState.OnServerInvoke = function(player)
+	if not player then
+		return nil
+	end
+	return buildSocialGoalsState(player)
+end
+
+requestSocialGoalClaim.OnServerInvoke = function(player, mode)
+	if not player then
+		return nil
+	end
+	local ok = SocialGoalsService.Claim(player, mode)
+	if not ok then
+		return nil
+	end
+	local state = buildSocialGoalsState(player)
+	if socialGoalsUpdated then
+		socialGoalsUpdated:FireClient(player, state)
+	end
+	return state
+end
+
+requestSocialForceRefresh.OnServerInvoke = function(player)
+	if not player then
+		return nil
+	end
+	local ok = SocialGoalsService.ForceRefresh(player)
+	if not ok then
+		return nil
+	end
+	return true
 end
 
 requestLeaderboard.OnServerInvoke = function(player, limit)
@@ -319,12 +594,63 @@ requestLeaderboard.OnServerInvoke = function(player, limit)
 	return result
 end
 
-buyUpgradeEvent.OnServerEvent:Connect(function(player, upgradeId)
+clientUxEvent.OnServerEvent:Connect(function(player, payload)
+	if not player or typeof(payload) ~= "table" then
+		return
+	end
+	local eventType = payload.type
+	if eventType == "TabOpened" then
+		local tab = tostring(payload.tab or "")
+		if tab ~= "Stats" and tab ~= "Leaderboards" and tab ~= "Prestige" then
+			return
+		end
+		if not AnalyticsTrackerService.DebouncedTabEvent(player, tab) then
+			return
+		end
+		AnalyticsTrackerService.LogCustomCounter(player, "TabOpened", { tab = tab })
+		if tab == "Prestige" then
+			AnalyticsTrackerService.TrackPrestigeTabOpened(player)
+			local sessionId = AnalyticsTrackerService.GetOrStartFunnel(player, "PrestigeTreePurchase")
+			if sessionId then
+				AnalyticsTrackerService.LogFunnelStep(player, "PrestigeTreePurchase", sessionId, 1, "Opened Prestige Tab")
+			end
+		elseif tab == "Leaderboards" then
+			AnalyticsTrackerService.LogCustomCounter(player, "LeaderboardViewed")
+		end
+	elseif eventType == "StoreOpened" then
+		local sessionId = AnalyticsTrackerService.StartFunnelSession(player, "StoreCheckout")
+		if sessionId then
+			AnalyticsTrackerService.LogFunnelStep(player, "StoreCheckout", sessionId, 1, "Opened Store", {
+				placement = tostring(payload.placement or "Unknown"),
+			})
+		end
+	elseif eventType == "StorePurchaseClicked" then
+		local sessionId = AnalyticsTrackerService.GetOrStartFunnel(player, "StoreCheckout")
+		if sessionId then
+			AnalyticsTrackerService.LogFunnelStep(player, "StoreCheckout", sessionId, 3, "Clicked Purchase", {
+				itemSKU = tostring(payload.itemSKU or "Unknown"),
+			})
+		end
+	elseif eventType == "PrestigeNodeSelected" then
+		local nodeId = tostring(payload.nodeId or "")
+		if nodeId == "" then
+			return
+		end
+		local sessionId = AnalyticsTrackerService.GetOrStartFunnel(player, "PrestigeTreePurchase")
+		if sessionId then
+			AnalyticsTrackerService.LogFunnelStep(player, "PrestigeTreePurchase", sessionId, 2, "Selected Node", {
+				itemSKU = nodeId,
+			})
+		end
+	end
+end)
+
+buyUpgradeEvent.OnServerEvent:Connect(function(player, upgradeId, count)
 	if not player then
 		return
 	end
 
-	UpgradeService.Buy(player, upgradeId)
+	UpgradeService.Buy(player, upgradeId, count)
 end)
 
 prestigeEvent.OnServerEvent:Connect(function(player)
@@ -332,6 +658,9 @@ prestigeEvent.OnServerEvent:Connect(function(player)
 		return
 	end
 
+	if savingFlags[player] or PrestigeService.IsPrestiging(player) then
+		return
+	end
 	print(string.format("[Prestige] Request from %s", player.Name))
 	PrestigeService.Prestige(player)
 end)
@@ -344,6 +673,7 @@ for _, player in Players:GetPlayers() do
 end
 
 startProductionLoop()
+SocialGoalsService.Start()
 
 game:BindToClose(function()
 	for _, player in Players:GetPlayers() do

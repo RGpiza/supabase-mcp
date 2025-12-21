@@ -39,6 +39,7 @@ function UpgradeController.Init(ctx)
 	local NumberFormatter = ctx.NumberFormatter
 	local RunService = ctx.RunService
 	local TweenService = ctx.TweenService
+	local UserInputService = ctx.UserInputService or game:GetService("UserInputService")
 	local MarketplaceService = ctx.MarketplaceService or game:GetService("MarketplaceService")
 	local template = ctx.template
 	local cpuCardsFolder = ctx.cpuCardsFolder
@@ -60,17 +61,35 @@ function UpgradeController.Init(ctx)
 	local multFinalValue = ctx.multFinalValue
 	local prestigeButton = ctx.prestigeButton
 	local prestigeOverlay = ctx.prestigeOverlay
+	local prestigeBox = ctx.prestigeBox
+	local prestigePanel = ctx.prestigePanel
+	local prestigePointsLabel = ctx.prestigePointsLabel
+	local prestigePreviewLabel = ctx.prestigePreviewLabel
+	local prestigeLevelLabel = ctx.prestigeLevelLabel
+	local prestigeLifetimeLabel = ctx.prestigeLifetimeLabel
+	local prestigeTreeViewport = ctx.prestigeTreeViewport
+	local autoCpuLabel = ctx.autoCpuLabel
+	local autoRamLabel = ctx.autoRamLabel
+	local autoStoLabel = ctx.autoStoLabel
 	local requestSync = ctx.requestSync
 	local buyUpgradeEvent = ctx.buyUpgradeEvent
 	local prestigeEvent = ctx.prestigeEvent
 	local saveStatusEvent = ctx.saveStatusEvent
 	local toastLabel = ctx.toastLabel
 	local onSync = ctx.onSync
+	local onPrestige = ctx.onPrestige
 
 	local playerState = {
 		data = 0,
+		peakData = 0,
 		upgrades = {},
 		prestige = 0,
+		prestigePoints = 0,
+		prestigePointsNext = 0,
+		prestigeNextAt = 0,
+		prestigeUpgrades = {},
+		unlocks = {},
+		automation = {},
 		corePower = 0,
 		owns2xData = false,
 		ownsFasterAuto = false,
@@ -84,6 +103,8 @@ function UpgradeController.Init(ctx)
 	local purchaseDebounce = {}
 	local prestigeEnabled = true
 	local prestigeInFlight = false
+	local prestigeConfirmPending = false
+	local prestigeConfirmToken = 0
 	local lastCanPrestige = false
 	local storageTierMap = {
 		[1] = "sto_1",
@@ -513,12 +534,60 @@ function UpgradeController.Init(ctx)
 		lastCanPrestige = canPrestige
 		local enabled = prestigeEnabled and canPrestige and not prestigeInFlight
 		if prestigeButton then
-			setButtonState(prestigeButton, enabled, enabled and "PRESTIGE" or "LOCKED")
+			local label = enabled and "PRESTIGE" or "LOCKED"
+			if enabled and prestigeConfirmPending then
+				label = "CONFIRM"
+			end
+			setButtonState(prestigeButton, enabled, label)
 			prestigeButton.Active = enabled
 		end
 		if prestigeOverlay then
 			prestigeOverlay.Visible = not canPrestige or not prestigeEnabled
 			prestigeOverlay.Active = not canPrestige or not prestigeEnabled
+		end
+	end
+
+	local function updatePrestigeBoxText()
+		if not prestigeBox then
+			return
+		end
+		local header = prestigeBox:FindFirstChild("PrestigeHeader")
+		if header and header:IsA("TextLabel") then
+			local prestigeCount = playerState.prestige or 0
+			local pp = playerState.prestigePoints or 0
+			local nextGain = playerState.prestigePointsNext or 0
+			header.Text = string.format("Prestige %d  PP: %d (+%d)", prestigeCount, pp, nextGain)
+		end
+		local function setAutoLabel(label, isOn, text)
+			if label and label:IsA("TextLabel") then
+				label.Text = string.format("%s: %s", text, isOn and "ON" or "LOCKED")
+				label.TextColor3 = isOn and Color3.fromRGB(120, 220, 150) or Color3.fromRGB(180, 180, 190)
+			end
+		end
+		local unlocks = playerState.unlocks or {}
+		setAutoLabel(autoCpuLabel, unlocks.auto_cpu_1 == true, "Auto CPU")
+		setAutoLabel(autoRamLabel, unlocks.auto_ram_1 == true, "Auto RAM")
+		setAutoLabel(autoStoLabel, unlocks.auto_sto_1 == true, "Auto STO")
+		if prestigePointsLabel and prestigePointsLabel:IsA("TextLabel") then
+			local pp = playerState.prestigePoints or 0
+			prestigePointsLabel.Visible = pp > 0
+			prestigePointsLabel.Text = string.format("PP: %d", pp)
+		end
+		if prestigePreviewLabel and prestigePreviewLabel:IsA("TextLabel") then
+			local pp = playerState.prestigePoints or 0
+			local nextAt = playerState.prestigeNextAt or 0
+			prestigePreviewLabel.Visible = pp > 0
+			if nextAt > 0 then
+				prestigePreviewLabel.Text = string.format("Next PP at: %s", formatNumber(nextAt))
+			else
+				prestigePreviewLabel.Text = "Next PP at: -"
+			end
+		end
+		if prestigeLevelLabel and prestigeLevelLabel:IsA("TextLabel") then
+			prestigeLevelLabel.Text = tostring(playerState.prestige or 0)
+		end
+		if prestigeLifetimeLabel and prestigeLifetimeLabel:IsA("TextLabel") then
+			prestigeLifetimeLabel.Text = formatNumber(playerState.peakData or 0)
 		end
 	end
 
@@ -658,10 +727,20 @@ function UpgradeController.Init(ctx)
 			return
 		end
 		purchaseDebounce[upgradeId] = true
+		local batchLevel = 0
+		if playerState.prestigeUpgrades then
+			batchLevel = tonumber(playerState.prestigeUpgrades.pp_batch_buy_1) or 0
+		end
+		local count = 1
+		if batchLevel >= 2 and (UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)) then
+			count = 100
+		elseif batchLevel >= 1 and (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)) then
+			count = 10
+		end
 		if DebugConfig then
 			DebugConfig.Log(("[UpgradeController] clicked upgradeId=%s"):format(tostring(upgradeId)))
 		end
-		buyUpgradeEvent:FireServer(upgradeId)
+		buyUpgradeEvent:FireServer(upgradeId, count)
 		task.delay(0.25, function()
 			purchaseDebounce[upgradeId] = nil
 			refreshUpgradeCard(upgradeId)
@@ -678,10 +757,26 @@ function UpgradeController.Init(ctx)
 			warn("[UpgradeController] Prestige remote missing")
 			return
 		end
+		if not prestigeConfirmPending then
+			prestigeConfirmPending = true
+			prestigeConfirmToken += 1
+			local token = prestigeConfirmToken
+			updatePrestigeUI(lastCanPrestige)
+			task.delay(2.5, function()
+				if prestigeConfirmToken == token then
+					prestigeConfirmPending = false
+					updatePrestigeUI(lastCanPrestige)
+				end
+			end)
+			return
+		end
+		prestigeConfirmPending = false
 		prestigeInFlight = true
 		updatePrestigeUI(lastCanPrestige)
-		print("[Prestige] Clicked")
 		prestigeEvent:FireServer()
+		if typeof(onPrestige) == "function" then
+			onPrestige()
+		end
 		task.delay(0.4, function()
 			syncStateFromServer(true)
 		end)
@@ -690,8 +785,15 @@ function UpgradeController.Init(ctx)
 	local function sanitizeState(state)
 		local sanitized = {
 			data = typeof(state.data) == "number" and state.data or 0,
+			peakData = typeof(state.peakData) == "number" and state.peakData or 0,
 			upgrades = typeof(state.upgrades) == "table" and state.upgrades or {},
 			prestige = typeof(state.prestige) == "number" and state.prestige or 0,
+			prestigePoints = typeof(state.prestigePoints) == "number" and state.prestigePoints or 0,
+			prestigePointsNext = typeof(state.prestigePointsNext) == "number" and state.prestigePointsNext or 0,
+			prestigeNextAt = typeof(state.prestigeNextAt) == "number" and state.prestigeNextAt or 0,
+			prestigeUpgrades = typeof(state.prestigeUpgrades) == "table" and state.prestigeUpgrades or {},
+			unlocks = typeof(state.unlocks) == "table" and state.unlocks or {},
+			automation = typeof(state.automation) == "table" and state.automation or {},
 			corePower = typeof(state.corePower) == "number" and state.corePower or 0,
 			owns2xData = typeof(state.owns2xData) == "boolean" and state.owns2xData or false,
 			ownsFasterAuto = typeof(state.ownsFasterAuto) == "boolean" and state.ownsFasterAuto or false,
@@ -718,6 +820,7 @@ function UpgradeController.Init(ctx)
 			end
 		end
 		refreshAllUpgradeCards()
+		updatePrestigeBoxText()
 		if prestigeInFlight then
 			prestigeInFlight = false
 			updatePrestigeUI(lastCanPrestige)

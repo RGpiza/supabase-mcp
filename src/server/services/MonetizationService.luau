@@ -3,6 +3,7 @@ local MarketplaceService = game:GetService("MarketplaceService")
 local Players = game:GetService("Players")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
+local AnalyticsTrackerService = require(script.Parent.AnalyticsTrackerService)
 
 local MonetizationService = {}
 
@@ -141,6 +142,12 @@ function MonetizationService.ProcessReceipt(receiptInfo)
 
 	addReceipt(data, receiptInfo.PurchaseId)
 	PlayerDataService.Set(player, data)
+	local sessionId = AnalyticsTrackerService.GetOrStartFunnel(player, "StoreCheckout")
+	if sessionId then
+		AnalyticsTrackerService.LogFunnelStep(player, "StoreCheckout", sessionId, 4, "Purchase Success", {
+			itemSKU = tostring(productId),
+		})
+	end
 
 	return Enum.ProductPurchaseDecision.PurchaseGranted
 end

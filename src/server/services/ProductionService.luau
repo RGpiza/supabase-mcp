@@ -11,12 +11,13 @@ do
 	end
 end
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
+local PrestigePointsService = require(script.Parent.PrestigePointsService)
 local MonetizationService = require(script.Parent.MonetizationService)
 
 local ProductionService = {}
 
 local BASE_DPS = 1
-local PRESTIGE_BONUS = 0.1
+local PRESTIGE_BONUS = 0.25
 
 local function getLevel(upgrades, upgradeId)
 	if typeof(upgrades) ~= "table" then
@@ -48,11 +49,11 @@ local function applyUpgradeEffects(upgrades)
 end
 
 local function getPrestigeMultiplier(playerData)
-	local corePower = typeof(playerData.corePower) == "number" and playerData.corePower or 0
-	if corePower <= 0 then
+	local prestigeCount = typeof(playerData.prestige) == "number" and playerData.prestige or 0
+	if prestigeCount <= 0 then
 		return 1
 	end
-	return 1 + (corePower * PRESTIGE_BONUS)
+	return 1 + (prestigeCount * PRESTIGE_BONUS)
 end
 
 function ProductionService.GetSystemStats(upgrades)
@@ -93,11 +94,19 @@ function ProductionService.ComputeFinalProduction(playerData)
 	local upgrades = typeof(playerData.upgrades) == "table" and playerData.upgrades or {}
 	local add, upgradeMul = applyUpgradeEffects(upgrades)
 	local prestigeMul = getPrestigeMultiplier(playerData)
+	local ppGlobalLevel = PrestigePointsService.GetUpgradeLevel(playerData, "pp_global_mult_1")
+	local ppGlobalMul = 1 + (ppGlobalLevel * 0.05)
+	local cpuMul = 1 + (PrestigePointsService.GetUpgradeLevel(playerData, "pp_cpu_mult_1") * 0.04)
+	local ramMul = 1 + (PrestigePointsService.GetUpgradeLevel(playerData, "pp_ram_mult_1") * 0.04)
+	local storageMul = 1 + (PrestigePointsService.GetUpgradeLevel(playerData, "pp_storage_mult_1") * 0.05)
+	local endgameMul = 1 + (PrestigePointsService.GetUpgradeLevel(playerData, "pp_endgame_boost_1") * 0.2)
+	local likeBonus = typeof(playerData.productionBonus) == "number" and playerData.productionBonus or 0
+	local likeMul = 1 + math.max(likeBonus, 0)
 	local passMul = playerData.owns2xData and 2 or 1
 	local boostMul = MonetizationService.IsBoostActive(playerData) and 2 or 1
 
 	local base = BASE_DPS + add
-	local final = base * upgradeMul * prestigeMul * passMul * boostMul
+	local final = base * upgradeMul * prestigeMul * passMul * boostMul * ppGlobalMul * likeMul * cpuMul * ramMul * storageMul * endgameMul
 
 	local breakdown = {
 		additive = add,
@@ -105,6 +114,12 @@ function ProductionService.ComputeFinalProduction(playerData)
 		prestigeMul = prestigeMul,
 		passMul = passMul,
 		boostMul = boostMul,
+		ppGlobalMul = ppGlobalMul,
+		likeMul = likeMul,
+		cpuMul = cpuMul,
+		ramMul = ramMul,
+		storageMul = storageMul,
+		endgameMul = endgameMul,
 	}
 
 	if DebugConfig then

@@ -180,6 +180,7 @@ function StoreUIController.Init(ctx)
 	local topBar = safeArea and safeArea:FindFirstChild("TopBar")
 	local storeButton = topBar and topBar:FindFirstChild("StoreButton")
 	local storeClose = storeUi and storeUi:FindFirstChild("Header") and storeUi.Header:FindFirstChild("Close")
+	local uxEvent = ctx.uxEvent
 
 	if storeUi and storeUi:IsA("GuiObject") then
 		storeUi.Visible = false
@@ -203,6 +204,9 @@ function StoreUIController.Init(ctx)
 				storeOverlay.ZIndex = 10
 				storeOverlay.Visible = open
 				storeOverlay.Active = open
+			end
+			if open and uxEvent and uxEvent:IsA("RemoteEvent") then
+				uxEvent:FireServer({ type = "StoreOpened", placement = "TopBarStoreButton" })
 			end
 			if DebugConfig then
 				DebugConfig.Log(open and "[StoreUI] Store opened" or "[StoreUI] Store closed")
@@ -283,6 +287,9 @@ function StoreUIController.Init(ctx)
 				DebugConfig.Log(("[StoreUI] Button bound for %s"):format(entry.key))
 			end
 			button.Activated:Connect(function()
+				if uxEvent and uxEvent:IsA("RemoteEvent") then
+					uxEvent:FireServer({ type = "StorePurchaseClicked", itemSKU = entry.key })
+				end
 				if entry.type == "Gamepass" then
 					MarketplaceService:PromptGamePassPurchase(player, entry.id)
 				else
