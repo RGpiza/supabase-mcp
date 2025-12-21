@@ -10,15 +10,21 @@
     },
 
     "ServerScriptService": {
-      "Server": {
-        "$path": "src/server"
+      "services": {
+        "$path": "src/server/services"
+      },
+      "ServerLoader": {
+        "$path": "src/server/ServerLoader.server.luau"
       }
     },
 
     "StarterPlayer": {
       "StarterPlayerScripts": {
-        "Client": {
-          "$path": "src/client"
+        "controllers": {
+          "$path": "src/client/controllers"
+        },
+        "ClientLoader": {
+          "$path": "src/client/ClientLoader.client.luau"
         }
       }
     },

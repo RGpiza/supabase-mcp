@@ -1,3 +1,6 @@
+local GameServerService = {}
+
+function GameServerService.OnStart()
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -28,6 +31,7 @@ end
 local requestSync = ensureRemote("RemoteFunction", "RequestSync")
 local buyUpgradeEvent = ensureRemote("RemoteEvent", "RequestBuyUpgrade")
 local prestigeEvent = ensureRemote("RemoteEvent", "RequestPrestige")
+local requestLeaderboard = ensureRemote("RemoteFunction", "RequestLeaderboard")
 local saveStatusEvent = ensureRemote("RemoteEvent", "SaveStatus")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
@@ -35,12 +39,24 @@ local ProductionService = require(script.Parent.ProductionService)
 local UpgradeService = require(script.Parent.UpgradeService)
 local PrestigeService = require(script.Parent.PrestigeService)
 local MonetizationService = require(script.Parent.MonetizationService)
+local LeaderboardService = require(script.Parent.LeaderboardService)
+local DebugConfig = nil
+do
+	local ok, mod = pcall(function()
+		return require(game:GetService("ReplicatedStorage").Shared.utils:FindFirstChild("DebugConfig"))
+	end)
+	if ok and type(mod) == "table" then
+		DebugConfig = mod
+	end
+end
+local DEBUG_LEADERBOARD = false
 
 local activePlayers = {}
 local productionLoopStarted = false
 local autosaveFlags = {}
 
 local AUTOSAVE_INTERVAL = 60
+local LEADERBOARD_LIMIT = 50
 
 local debugTimer = 0
 local dtAccumulator = 0
@@ -85,6 +101,10 @@ local function startAutosave(player)
 			end
 
 			if player and player.Parent then
+				local cached = PlayerDataService.Get(player)
+				if cached and typeof(cached) == "table" then
+					LeaderboardService.UpdatePlayerStat(player, cached.data or 0)
+				end
 				savePlayerWithStatus(player)
 			else
 				autosaveFlags[player] = nil
@@ -99,17 +119,62 @@ local function stopAutosave(player)
 end
 
 local function addPlayer(player)
-	PlayerDataService.InitPlayer(player)
+	local data = PlayerDataService.InitPlayer(player)
 	MonetizationService.ApplyPasses(player)
 	activePlayers[player] = true
 	startAutosave(player)
+	if data and typeof(data) == "table" then
+		LeaderboardService.EnsurePlayerEntry(player, data.data or 0)
+	else
+		LeaderboardService.EnsurePlayerEntry(player, 0)
+	end
 end
 
 local function removePlayer(player)
 	activePlayers[player] = nil
 	stopAutosave(player)
+	local cached = PlayerDataService.Get(player)
+	if cached and typeof(cached) == "table" then
+		LeaderboardService.UpdatePlayerStat(player, cached.data or 0)
+	else
+		LeaderboardService.UpdatePlayerStat(player, 0)
+	end
 	savePlayerWithStatus(player)
 	PlayerDataService.Release(player)
+end
+
+local function buildLeaderboard(limit)
+	local entries = {}
+	for player in pairs(activePlayers) do
+		if player and player.Parent then
+			local data = PlayerDataService.Get(player)
+			if typeof(data) == "table" then
+				table.insert(entries, {
+					userId = player.UserId,
+					username = player.Name,
+					score = data.data or 0,
+				})
+			end
+		end
+	end
+
+	table.sort(entries, function(a, b)
+		return (a.score or 0) > (b.score or 0)
+	end)
+
+	local result = {}
+	limit = limit or 10
+	for index = 1, math.min(limit, #entries) do
+		local entry = entries[index]
+		result[#result + 1] = {
+			rank = index,
+			userId = entry.userId,
+			username = entry.username,
+			score = entry.score,
+		}
+	end
+
+	return result
 end
 
 local function applyProduction(player, deltaTime)
@@ -171,7 +236,9 @@ local function startProductionLoop()
 
 		if debugTimer >= 2 then
 			local avgDt = dtSamples > 0 and (dtAccumulator / dtSamples) or 0
-			print(string.format("[System Incremental] avg dt: %.4f, sample dps: %.2f, sample added: %.4f", avgDt, lastDebugDps or 0, lastDebugAmount or 0))
+			if DebugConfig then
+				DebugConfig.Log(string.format("[System Incremental] avg dt: %.4f, sample dps: %.2f, sample added: %.4f", avgDt, lastDebugDps or 0, lastDebugAmount or 0))
+			end
 			debugTimer = 0
 			dtAccumulator = 0
 			dtSamples = 0
@@ -191,6 +258,7 @@ requestSync.OnServerInvoke = function(player)
 	local boostActive = MonetizationService.IsBoostActive(data)
 	local system = ProductionService.GetSystemStats(data.upgrades or {})
 	local breakdown = production.breakdown or {}
+	local leaderboard = buildLeaderboard(10)
 
 	return {
 		data = data.data,
@@ -216,7 +284,39 @@ requestSync.OnServerInvoke = function(player)
 		baseDps = production.baseDps,
 		finalDps = production.finalDps,
 		multiplierBreakdown = production.breakdown,
+		leaderboard = leaderboard,
 	}
+end
+
+requestLeaderboard.OnServerInvoke = function(player, limit)
+	if not player then
+		return {}
+	end
+
+	local entries = LeaderboardService.GetTopPlayers(limit or LEADERBOARD_LIMIT)
+	local result = {}
+	for index, entry in ipairs(entries) do
+		local username = nil
+		local ok, nameOrErr = pcall(function()
+			return Players:GetNameFromUserIdAsync(entry.userId)
+		end)
+		if ok and nameOrErr then
+			username = nameOrErr
+		else
+			username = ("Player%s"):format(tostring(entry.userId))
+		end
+		result[#result + 1] = {
+			rank = index,
+			userId = entry.userId,
+			username = username,
+			value = entry.value,
+		}
+	end
+
+	if DEBUG_LEADERBOARD then
+		print(("[Leaderboard] Fetched entries=%d"):format(#result))
+	end
+	return result
 end
 
 buyUpgradeEvent.OnServerEvent:Connect(function(player, upgradeId)
@@ -232,6 +332,7 @@ prestigeEvent.OnServerEvent:Connect(function(player)
 		return
 	end
 
+	print(string.format("[Prestige] Request from %s", player.Name))
 	PrestigeService.Prestige(player)
 end)
 
@@ -246,7 +347,17 @@ startProductionLoop()
 
 game:BindToClose(function()
 	for _, player in Players:GetPlayers() do
+		local cached = PlayerDataService.Get(player)
+		if cached and typeof(cached) == "table" then
+			LeaderboardService.UpdatePlayerStat(player, cached.data or 0)
+		else
+			LeaderboardService.UpdatePlayerStat(player, 0)
+		end
 		savePlayerWithStatus(player)
 		PlayerDataService.Release(player)
 	end
 end)
+
+end
+
+return GameServerService

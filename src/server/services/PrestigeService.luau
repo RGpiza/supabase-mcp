@@ -2,6 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
+local LeaderboardService = require(script.Parent.LeaderboardService)
 
 local PrestigeService = {}
 
@@ -55,6 +56,7 @@ function PrestigeService.Prestige(player)
 
 	PlayerDataService.Set(player, state)
 	PlayerDataService.Save(player)
+	LeaderboardService.UpdatePlayerStat(player, state.data or 0)
 
 	return true
 end

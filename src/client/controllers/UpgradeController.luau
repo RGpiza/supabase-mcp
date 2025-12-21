@@ -1,6 +1,24 @@
 local UpgradeController = {}
 
 local initialized = false
+local DebugTrace = nil
+local DebugConfig = nil
+do
+	local ok, mod = pcall(function()
+		return require(game:GetService("ReplicatedStorage").Utils:FindFirstChild("DebugTrace"))
+	end)
+	if ok and type(mod) == "table" then
+		DebugTrace = mod
+	end
+end
+do
+	local ok, mod = pcall(function()
+		return require(game:GetService("ReplicatedStorage").Shared.utils:FindFirstChild("DebugConfig"))
+	end)
+	if ok and type(mod) == "table" then
+		DebugConfig = mod
+	end
+end
 
 function UpgradeController.Init(ctx)
 	if initialized then
@@ -8,13 +26,20 @@ function UpgradeController.Init(ctx)
 	end
 	initialized = true
 
+	local Players = ctx.Players or game:GetService("Players")
+	local localPlayer = ctx.player or Players.LocalPlayer
+	local playerGui = localPlayer and localPlayer:FindFirstChild("PlayerGui")
+	local liveTerminal = playerGui and playerGui:FindFirstChild("TerminalUI")
+	if not ctx.terminalGui or not liveTerminal or ctx.terminalGui ~= liveTerminal then
+		warn("[UpgradeController] terminalGui is not PlayerGui.TerminalUI")
+		return false
+	end
+
 	local UpgradeConfig = ctx.UpgradeConfig
 	local NumberFormatter = ctx.NumberFormatter
 	local RunService = ctx.RunService
 	local TweenService = ctx.TweenService
 	local MarketplaceService = ctx.MarketplaceService or game:GetService("MarketplaceService")
-	local Players = ctx.Players or game:GetService("Players")
-	local localPlayer = ctx.player or Players.LocalPlayer
 	local template = ctx.template
 	local cpuCardsFolder = ctx.cpuCardsFolder
 	local ramCardsFolder = ctx.ramCardsFolder
@@ -57,6 +82,9 @@ function UpgradeController.Init(ctx)
 	local upgradeCards = {}
 	local boundUpgrades = {}
 	local purchaseDebounce = {}
+	local prestigeEnabled = true
+	local prestigeInFlight = false
+	local lastCanPrestige = false
 	local storageTierMap = {
 		[1] = "sto_1",
 		[2] = "sto_2",
@@ -314,13 +342,25 @@ function UpgradeController.Init(ctx)
 
 	local function updateStats()
 		if statsDpsValue then
-			statsDpsValue.Text = formatNumber(lastKnownDps)
+			statsDpsValue.Text = formatNumber(playerState.data)
+			statsDpsValue.TextTransparency = 0
+			if DebugTrace then
+				DebugTrace.LogUpdate(statsDpsValue:GetFullName(), statsDpsValue.Text)
+			end
+		end
+		if statsCorePowerValue then
+			statsCorePowerValue.Text = formatNumber(lastKnownDps)
+			statsCorePowerValue.TextTransparency = 0
+			if DebugTrace then
+				DebugTrace.LogUpdate(statsCorePowerValue:GetFullName(), statsCorePowerValue.Text)
+			end
 		end
 		if statsPrestigeValue then
 			statsPrestigeValue.Text = string.format("Prestige %d", playerState.prestige or 0)
-		end
-		if statsCorePowerValue then
-			statsCorePowerValue.Text = string.format("Core Power %s", formatNumber(playerState.corePower or 0))
+			statsPrestigeValue.TextTransparency = 0
+			if DebugTrace then
+				DebugTrace.LogUpdate(statsPrestigeValue:GetFullName(), statsPrestigeValue.Text)
+			end
 		end
 	end
 
@@ -330,13 +370,22 @@ function UpgradeController.Init(ctx)
 		end
 		if value == nil then
 			label.Text = "—"
+			if label:IsA("TextLabel") or label:IsA("TextButton") then
+				label.TextTransparency = 0
+			end
 			return
 		end
 		if formatter then
 			label.Text = formatter(value)
+			if label:IsA("TextLabel") or label:IsA("TextButton") then
+				label.TextTransparency = 0
+			end
 			return
 		end
 		label.Text = tostring(value)
+		if label:IsA("TextLabel") or label:IsA("TextButton") then
+			label.TextTransparency = 0
+		end
 	end
 
 	local function formatMultiplier(value)
@@ -403,12 +452,31 @@ function UpgradeController.Init(ctx)
 			setLabel(multFinalValue, nil)
 		end
 
-		print(("[UpgradeController] Stats update data=%s dps=%s prestige=%s core=%s"):format(
-			tostring(dataValue),
-			tostring(dpsValue),
-			tostring(prestigeValue),
-			tostring(corePowerValue)
-		))
+		if DebugConfig then
+			DebugConfig.Log(("[UpgradeController] Stats update data=%s dps=%s prestige=%s core=%s"):format(
+				tostring(dataValue),
+				tostring(dpsValue),
+				tostring(prestigeValue),
+				tostring(corePowerValue)
+			))
+		end
+
+		if dataValueLabel then
+			dataValueLabel.Text = formatNumber(dataValue)
+			dataValueLabel.TextTransparency = 0
+		end
+
+		local expectedDataText = formatNumber(dataValue)
+		if DebugConfig and dataValueLabel and dataValueLabel.Text ~= expectedDataText then
+			DebugConfig.Warn(string.format("[UI SYNC] DataValue mismatch expected=%s actual=%s path=%s time=%s", expectedDataText, tostring(dataValueLabel.Text), dataValueLabel:GetFullName(), tostring(os.time())))
+		end
+		if DebugConfig and statsDpsValue and statsDpsValue.Text ~= formatNumber(dpsValue) then
+			DebugConfig.Warn(string.format("[UI SYNC] Stat1 mismatch expected=%s actual=%s path=%s time=%s", formatNumber(dpsValue), tostring(statsDpsValue.Text), statsDpsValue:GetFullName(), tostring(os.time())))
+		end
+		local expectedPrestige = string.format("Prestige %d", playerState.prestige or 0)
+		if DebugConfig and statsPrestigeValue and statsPrestigeValue.Text ~= expectedPrestige then
+			DebugConfig.Warn(string.format("[UI SYNC] Stat3 mismatch expected=%s actual=%s path=%s time=%s", expectedPrestige, tostring(statsPrestigeValue.Text), statsPrestigeValue:GetFullName(), tostring(os.time())))
+		end
 	end
 
 	local function buildEffectText(upgrade, level, maxLevel)
@@ -441,13 +509,21 @@ function UpgradeController.Init(ctx)
 		return "Upgrade"
 	end
 
-	local function setPrestigeState(canPrestige)
+	local function updatePrestigeUI(canPrestige)
+		lastCanPrestige = canPrestige
+		local enabled = prestigeEnabled and canPrestige and not prestigeInFlight
 		if prestigeButton then
-			setButtonState(prestigeButton, canPrestige, canPrestige and "PRESTIGE" or "LOCKED")
+			setButtonState(prestigeButton, enabled, enabled and "PRESTIGE" or "LOCKED")
+			prestigeButton.Active = enabled
 		end
 		if prestigeOverlay then
-			prestigeOverlay.Visible = not canPrestige
+			prestigeOverlay.Visible = not canPrestige or not prestigeEnabled
+			prestigeOverlay.Active = not canPrestige or not prestigeEnabled
 		end
+	end
+
+	local function setPrestigeState(canPrestige)
+		updatePrestigeUI(canPrestige)
 	end
 
 	local function applyStorageTierHighlights(newTier)
@@ -472,7 +548,9 @@ function UpgradeController.Init(ctx)
 		end
 		local cfg = UpgradeConfig.getUpgradeById(upgradeId)
 		if not cfg then
-			warn("[UpgradeController] Missing config for upgradeId:", upgradeId)
+			if DebugConfig then
+				DebugConfig.Warn("[UpgradeController] Missing config for upgradeId:", upgradeId)
+			end
 			if cardEntry.card then
 				cardEntry.card.Visible = false
 			end
@@ -566,7 +644,9 @@ function UpgradeController.Init(ctx)
 		end
 		local currentTier = UpgradeConfig.GetStorageTier(playerState.upgrades or {})
 		setPrestigeState(currentTier >= 3)
-		print(("[UpgradeController] Refreshed cards=%d"):format(count))
+		if DebugConfig then
+			DebugConfig.Log(("[UpgradeController] Refreshed cards=%d"):format(count))
+		end
 	end
 
 	local function handleBuyUpgrade(upgradeId)
@@ -578,7 +658,9 @@ function UpgradeController.Init(ctx)
 			return
 		end
 		purchaseDebounce[upgradeId] = true
-		print(("[UpgradeController] clicked upgradeId=%s"):format(tostring(upgradeId)))
+		if DebugConfig then
+			DebugConfig.Log(("[UpgradeController] clicked upgradeId=%s"):format(tostring(upgradeId)))
+		end
 		buyUpgradeEvent:FireServer(upgradeId)
 		task.delay(0.25, function()
 			purchaseDebounce[upgradeId] = nil
@@ -589,10 +671,16 @@ function UpgradeController.Init(ctx)
 	end
 
 	local function handlePrestige()
+		if not prestigeEnabled or prestigeInFlight then
+			return
+		end
 		if not prestigeEvent then
 			warn("[UpgradeController] Prestige remote missing")
 			return
 		end
+		prestigeInFlight = true
+		updatePrestigeUI(lastCanPrestige)
+		print("[Prestige] Clicked")
 		prestigeEvent:FireServer()
 		task.delay(0.4, function()
 			syncStateFromServer(true)
@@ -623,11 +711,17 @@ function UpgradeController.Init(ctx)
 			validatedUpgradeIds = true
 			for upgradeId in pairs(playerState.upgrades or {}) do
 				if not UpgradeConfig.getUpgradeById(upgradeId) then
-					warn("[UpgradeController] Unknown upgradeId in state:", upgradeId)
+					if DebugConfig then
+						DebugConfig.Warn("[UpgradeController] Unknown upgradeId in state:", upgradeId)
+					end
 				end
 			end
 		end
 		refreshAllUpgradeCards()
+		if prestigeInFlight then
+			prestigeInFlight = false
+			updatePrestigeUI(lastCanPrestige)
+		end
 		local tier = UpgradeConfig.GetStorageTier(playerState.upgrades or {})
 		if shouldHighlight then
 			applyStorageTierHighlights(tier)
@@ -658,7 +752,9 @@ function UpgradeController.Init(ctx)
 				warn("[UpgradeController] Invalid sync payload")
 				return
 			end
-			print("[UpgradeController] RequestSync success")
+			if DebugConfig then
+				DebugConfig.Log("[UpgradeController] RequestSync success")
+			end
 			applyState(result, shouldHighlight)
 		end)
 	end
@@ -681,7 +777,9 @@ function UpgradeController.Init(ctx)
 		local definition = UpgradeConfig.getUpgradeById(upgrade.id)
 		if not definition and not warnedMissingDef[upgrade.id] then
 			warnedMissingDef[upgrade.id] = true
-			warn(("[UpgradeController] Missing upgrade definition for %s"):format(upgrade.id))
+			if DebugConfig then
+				DebugConfig.Warn(("[UpgradeController] Missing upgrade definition for %s"):format(upgrade.id))
+			end
 		end
 
 		local card = template:Clone()
@@ -694,7 +792,9 @@ function UpgradeController.Init(ctx)
 			titleLabel.Text = (definition and definition.name) or upgrade.name or upgrade.id
 			titleLabel.TextTransparency = 0
 			titleLabel.Visible = true
-			print(("[UpgradeController] title set %s = %s"):format(upgrade.id, titleLabel.Text))
+			if DebugConfig then
+				DebugConfig.Log(("[UpgradeController] title set %s = %s"):format(upgrade.id, titleLabel.Text))
+			end
 		end
 
 		local descriptionLabel = card:FindFirstChild("CardDesc") or card:FindFirstChild("Description")
@@ -713,7 +813,9 @@ function UpgradeController.Init(ctx)
 			buyButton.ZIndex = math.max(buyButton.ZIndex, 5)
 			if not boundUpgrades[upgrade.id] then
 				boundUpgrades[upgrade.id] = true
-				print(("[UpgradeController] button bound upgradeId=%s"):format(upgrade.id))
+				if DebugConfig then
+					DebugConfig.Log(("[UpgradeController] button bound upgradeId=%s"):format(upgrade.id))
+				end
 				buyButton.MouseButton1Click:Connect(function()
 					handleBuyUpgrade(upgrade.id)
 				end)
@@ -749,6 +851,11 @@ function UpgradeController.Init(ctx)
 		prestigeButton.MouseButton1Click:Connect(handlePrestige)
 	end
 
+	UpgradeController.SetPrestigeEnabled = function(enabled)
+		prestigeEnabled = enabled and true or false
+		updatePrestigeUI(lastCanPrestige)
+	end
+
 	if saveStatusEvent then
 		local ok, err = pcall(function()
 			saveStatusEvent.OnClientEvent:Connect(function(state)
@@ -780,6 +887,12 @@ function UpgradeController.Init(ctx)
 			dataValueLabel.Text = formatNumber(displayedData)
 		end
 
+		local boostEnd = tonumber(playerState.boostEnd) or tonumber(playerState.boostExpiresAt) or 0
+		local remaining = boostEnd - os.time()
+		if remaining > 0 and statsPrestigeValue then
+			-- no-op: boost timer no longer writes into Stat3
+		end
+
 		syncTimer += dt
 		if syncTimer >= syncInterval then
 			syncTimer = 0
@@ -787,6 +900,9 @@ function UpgradeController.Init(ctx)
 		end
 	end)
 
+	if typeof(ctx.onReady) == "function" then
+		ctx.onReady()
+	end
 	print("[INIT] UpgradeController initialized")
 	return true
 end

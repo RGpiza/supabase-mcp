@@ -1,6 +1,15 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
+local DebugConfig = nil
+do
+	local ok, mod = pcall(function()
+		return require(game:GetService("ReplicatedStorage").Shared.utils:FindFirstChild("DebugConfig"))
+	end)
+	if ok and type(mod) == "table" then
+		DebugConfig = mod
+	end
+end
 local UpgradeConfig = require(ReplicatedStorage.Shared.UpgradeConfig)
 local MonetizationService = require(script.Parent.MonetizationService)
 
@@ -98,7 +107,9 @@ function ProductionService.ComputeFinalProduction(playerData)
 		boostMul = boostMul,
 	}
 
-	print(string.format("[Production] base=%0.3f add=%0.3f mulU=%0.3f mulP=%0.3f pass=%0.3f boost=%0.3f final=%0.3f", base, add, upgradeMul, prestigeMul, passMul, boostMul, final))
+	if DebugConfig then
+		DebugConfig.Log(string.format("[Production] base=%0.3f add=%0.3f mulU=%0.3f mulP=%0.3f pass=%0.3f boost=%0.3f final=%0.3f", base, add, upgradeMul, prestigeMul, passMul, boostMul, final))
+	end
 
 	return {
 		baseDps = base,
