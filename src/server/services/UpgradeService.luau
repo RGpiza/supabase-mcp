@@ -38,11 +38,14 @@ local function validateUpgradeCost(upgrade, upgradeId, currentLevel, playerData)
 		return false
 	end
 	if playerData then
-		local costLevel = PrestigePointsService.GetUpgradeLevel(playerData, "costReduction")
-		if costLevel > 0 then
-			local discount = math.clamp(costLevel * 0.02, 0, 0.3)
+		-- Apply cost reduction from Prestige upgrades
+		local costReductionLevel = PrestigePointsService.GetUpgradeLevel(playerData, "pp_softcap_smooth_1")
+		if costReductionLevel > 0 then
+			local discount = math.clamp(costReductionLevel * 0.015, 0, 0.06)
 			cost = cost * (1 - discount)
 		end
+		
+		-- Apply endgame smoothing
 		local smoothLevel = PrestigePointsService.GetUpgradeLevel(playerData, "pp_endgame_boost_1")
 		if smoothLevel > 0 then
 			local smoothDiscount = math.clamp(smoothLevel * 0.01, 0, 0.05)

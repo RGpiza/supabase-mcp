@@ -62,7 +62,7 @@ local function getLabel(card, nameA, nameB)
 	return nil
 end
 
-local function updateCard(def, card, points, level)
+local function updateCard(def, card, points, level, playerData)
 	local maxLevel = tonumber(def.maxLevel) or 0
 	local titleLabel = getLabel(card, "CardTitle", "Title")
 	if titleLabel then
@@ -96,15 +96,67 @@ local function updateCard(def, card, points, level)
 	local buyButton = card:FindFirstChild("CardBuyButton") or card:FindFirstChild("BuyButton")
 	if buyButton and buyButton:IsA("GuiButton") then
 		local canBuy = true
+		local unlockReason = ""
+		
 		if maxLevel > 0 and level >= maxLevel then
 			canBuy = false
 			buyButton.Text = "MAX"
 		else
-			local cost = getCost(def, level)
-			if points < cost then
-				canBuy = false
+			-- Check unlock conditions
+			if def.id == "pp_auto_unlock_2" then
+				local bypassLevel = playerData and playerData.prestigeUpgrades and playerData.prestigeUpgrades.pp_auto_bypass_1 or 0
+				if bypassLevel < 1 then
+					canBuy = false
+					unlockReason = "Requires Early Automation"
+				end
+			elseif def.id == "pp_auto_speed_2" then
+				local speedLevel = playerData and playerData.prestigeUpgrades and playerData.prestigeUpgrades.pp_auto_speed_1 or 0
+				if speedLevel < 5 then
+					canBuy = false
+					unlockReason = "Requires Auto Tick Lv 5"
+				end
+			elseif def.id == "pp_auto_eff_2" then
+				local effLevel = playerData and playerData.prestigeUpgrades and playerData.prestigeUpgrades.pp_auto_eff_1 or 0
+				if effLevel < 3 then
+					canBuy = false
+					unlockReason = "Requires Smart Auto Lv 3"
+				end
+			elseif def.id == "pp_global_mult_2" then
+				local globalLevel = playerData and playerData.prestigeUpgrades and playerData.prestigeUpgrades.pp_global_mult_1 or 0
+				if globalLevel < 8 then
+					canBuy = false
+					unlockReason = "Requires Global Overclock Lv 8"
+				end
+			elseif def.id == "pp_offline_duration_1" then
+				local offlineLevel = playerData and playerData.prestigeUpgrades and playerData.prestigeUpgrades.pp_offline_core_1 or 0
+				if offlineLevel < 3 then
+					canBuy = false
+					unlockReason = "Requires Offline Surge Lv 3"
+				end
+			elseif def.id == "pp_softcap_smooth_1" then
+				local totalUpgrades = 0
+				if playerData and playerData.upgrades then
+					for _, upgradeLevel in pairs(playerData.upgrades) do
+						if typeof(upgradeLevel) == "number" then
+							totalUpgrades += upgradeLevel
+						end
+					end
+				end
+				if totalUpgrades < 1000 then
+					canBuy = false
+					unlockReason = "Requires 1000 total upgrades"
+				end
 			end
-			buyButton.Text = "Buy"
+			
+			if canBuy then
+				local cost = getCost(def, level)
+				if points < cost then
+					canBuy = false
+				end
+				buyButton.Text = "Buy"
+			else
+				buyButton.Text = unlockReason ~= "" and unlockReason or "Locked"
+			end
 		end
 		buyButton.Active = canBuy
 		buyButton.AutoButtonColor = canBuy
@@ -214,7 +266,7 @@ function PrestigeUpgradesController.UpdateState(newState)
 		local card = cards[def.id]
 		if card then
 			local level = tonumber(state.prestigeUpgrades[def.id]) or 0
-			updateCard(def, card, state.prestigePoints or 0, level)
+			updateCard(def, card, state.prestigePoints or 0, level, newState)
 		end
 	end
 end
