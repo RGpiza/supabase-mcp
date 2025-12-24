@@ -11,6 +11,13 @@ local controllers = {}
 local lazyFeatures = {}
 local initOrder = {}
 
+-- Phase definitions
+local PHASES = {
+	CORE = "core",
+	UI_SHELL = "ui_shell", 
+	FEATURES = "features"
+}
+
 -- Service/Controller states
 local STATES = {
 	PENDING = "pending",
@@ -47,8 +54,16 @@ function InitManager.definePhase(name, dependencies)
 	return true
 end
 
--- Note: Default phases should be defined by the loader, not here
--- to avoid duplication issues
+-- Initialize default phases synchronously after the module is fully loaded
+-- We need to ensure these are defined before any initialization occurs
+local function initializeDefaultPhases()
+	InitManager.definePhase("core", {})
+	InitManager.definePhase("ui_shell", {"core"})
+	InitManager.definePhase("features", {"ui_shell"})
+end
+
+-- Call the initialization function immediately after module load
+initializeDefaultPhases()
 
 -- Service/Controller registration
 function InitManager.registerService(name, initFunction, phase, dependencies)
@@ -60,14 +75,14 @@ function InitManager.registerService(name, initFunction, phase, dependencies)
 	local item = {
 		name = name,
 		initFunction = initFunction,
-		phase = phase or "core",
+		phase = phase or PHASES.CORE,
 		dependencies = dependencies or {},
 		state = STATES.PENDING,
 		instance = nil,
 		error = nil
 	}
 	
-	if phase == "features" then
+	if phase == PHASES.FEATURES then
 		lazyFeatures[name] = item
 	else
 		services[name] = item
@@ -87,7 +102,7 @@ end
 
 -- Lazy feature management
 function InitManager.registerLazyFeature(name, initFunction, dependencies)
-	return InitManager.registerService(name, initFunction, "features", dependencies)
+	return InitManager.registerService(name, initFunction, PHASES.FEATURES, dependencies)
 end
 
 function InitManager.loadLazyFeature(name)
@@ -187,13 +202,13 @@ function InitManager.initialize()
 	log("Starting initialization...")
 	
 	-- Initialize core phase
-	if not InitManager._initializePhase("core") then
+	if not InitManager._initializePhase(PHASES.CORE) then
 		errorLog("Failed to initialize core phase")
 		return false
 	end
 	
 	-- Initialize UI shell phase
-	if not InitManager._initializePhase("ui_shell") then
+	if not InitManager._initializePhase(PHASES.UI_SHELL) then
 		errorLog("Failed to initialize UI shell phase")
 		return false
 	end

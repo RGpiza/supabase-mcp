@@ -54,40 +54,11 @@ local CONFIG = {
 		SERVICE_CRASH = "service_crash",
 	},
 	
-	-- Webhook configuration (optional) - IMPORTANT: Set this for Discord/webhook delivery
+	-- Webhook configuration (optional)
 	WEBHOOK_URL = "", -- Set this to enable Discord/webhook delivery
 	WEBHOOK_BATCH_SIZE = 10,
 	WEBHOOK_RETRY_ATTEMPTS = 3,
 }
-
--- Configuration validation
-local function validateConfig()
-	if not CONFIG.ENABLED then
-		return true, "Disabled in Studio or not configured"
-	end
-	
-	if CONFIG.THROTTLE_WINDOW < 1 then
-		return false, "Invalid THROTTLE_WINDOW - must be at least 1 second"
-	end
-	
-	if CONFIG.BATCH_INTERVAL < 1 then
-		return false, "Invalid BATCH_INTERVAL - must be at least 1 second"
-	end
-	
-	if CONFIG.MAX_BATCH_SIZE < 1 then
-		return false, "Invalid MAX_BATCH_SIZE - must be at least 1"
-	end
-	
-	if CONFIG.WEBHOOK_BATCH_SIZE < 1 then
-		return false, "Invalid WEBHOOK_BATCH_SIZE - must be at least 1"
-	end
-	
-	if CONFIG.WEBHOOK_RETRY_ATTEMPTS < 0 then
-		return false, "Invalid WEBHOOK_RETRY_ATTEMPTS - must be non-negative"
-	end
-	
-	return true, "Configuration valid"
-end
 
 -- Internal state
 local errorCache = {}

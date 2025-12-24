@@ -30,7 +30,7 @@ local CONFIG = {
 	-- Only run in published games
 	ENABLED = game.PlaceId ~= 0 and not RunService:IsStudio(),
 	
-	-- GitHub integration - IMPORTANT: Set this in your game settings
+	-- GitHub integration
 	MIDDLEWARE_ENDPOINT = "", -- Set this to enable GitHub issue creation
 	RETRY_ATTEMPTS = 3,
 	RETRY_DELAY = 2, -- seconds
@@ -67,35 +67,6 @@ local CONFIG = {
 		["SocialGoalsService"] = "social",
 	},
 }
-
--- Configuration validation
-local function validateConfig()
-	if not CONFIG.ENABLED then
-		return true, "Disabled in Studio or not configured"
-	end
-	
-	if not CONFIG.MIDDLEWARE_ENDPOINT or CONFIG.MIDDLEWARE_ENDPOINT == "" then
-		return false, "GitHub middleware endpoint not configured - set MIDDLEWARE_ENDPOINT to enable GitHub integration"
-	end
-	
-	if CONFIG.MIN_SEVERITY_FOR_ISSUE < 1 or CONFIG.MIN_SEVERITY_FOR_ISSUE > 4 then
-		return false, "Invalid MIN_SEVERITY_FOR_ISSUE - must be between 1 and 4"
-	end
-	
-	if CONFIG.MIN_OCCURRENCE_COUNT < 1 then
-		return false, "Invalid MIN_OCCURRENCE_COUNT - must be at least 1"
-	end
-	
-	if CONFIG.ISSUE_COOLDOWN_MINUTES < 1 then
-		return false, "Invalid ISSUE_COOLDOWN_MINUTES - must be at least 1"
-	end
-	
-	if CONFIG.MAX_ISSUES_PER_HOUR < 1 then
-		return false, "Invalid MAX_ISSUES_PER_HOUR - must be at least 1"
-	end
-	
-	return true, "Configuration valid"
-end
 
 -- Internal state
 local issueCache = {}
