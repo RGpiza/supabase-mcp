@@ -8,8 +8,28 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Import SystemIncrementalUI
-local SystemIncrementalUI = require(script.Parent.SystemIncrementalUI)
+-- Import SystemIncrementalUI from ReplicatedStorage
+local SystemIncrementalUI
+local success, result = pcall(function()
+	return require(ReplicatedStorage.Shared.SystemIncrementalUI)
+end)
+if success then
+	SystemIncrementalUI = result
+	print("[ClientLoader] SystemIncrementalUI loaded successfully")
+else
+	warn("[ClientLoader] Failed to load SystemIncrementalUI:", result)
+	-- Try alternative path
+	local success2, result2 = pcall(function()
+		return require(script.Parent.SystemIncrementalUI)
+	end)
+	if success2 then
+		SystemIncrementalUI = result2
+		print("[ClientLoader] SystemIncrementalUI loaded from alternative path")
+	else
+		warn("[ClientLoader] Failed to load SystemIncrementalUI from alternative path:", result2)
+		SystemIncrementalUI = nil
+	end
+end
 
 -- Import other controllers for compatibility
 local function loadController(name)

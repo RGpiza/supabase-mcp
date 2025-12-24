@@ -18,11 +18,6 @@ local PHASES = {
 	FEATURES = "features"
 }
 
--- Default phase definitions
-InitManager.definePhase("core", {})
-InitManager.definePhase("ui_shell", {"core"})
-InitManager.definePhase("features", {"ui_shell"})
-
 -- Service/Controller states
 local STATES = {
 	PENDING = "pending",
@@ -58,6 +53,17 @@ function InitManager.definePhase(name, dependencies)
 	log("Phase defined:", name)
 	return true
 end
+
+-- Initialize default phases synchronously after the module is fully loaded
+-- We need to ensure these are defined before any initialization occurs
+local function initializeDefaultPhases()
+	InitManager.definePhase("core", {})
+	InitManager.definePhase("ui_shell", {"core"})
+	InitManager.definePhase("features", {"ui_shell"})
+end
+
+-- Call the initialization function immediately after module load
+initializeDefaultPhases()
 
 -- Service/Controller registration
 function InitManager.registerService(name, initFunction, phase, dependencies)
