@@ -1,2 +1,3 @@
 Dont Generate any coments in code.
-Dont mak summarys.
+Dont make summarys.
+All of my Scripts/Code is in "/SYSTEM-INCREMENTAL/src".

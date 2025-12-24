@@ -10,16 +10,8 @@ local StoreService = require(script.Parent.MonetizationService)
 local SocialGoalsService = require(script.Parent.SocialGoalsService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
 local ProductionFeedbackService = require(script.Parent.ProductionFeedbackService)
-local DebugConfig = nil
-
-do
-	local ok, mod = pcall(function()
-		return require(game:GetService("ReplicatedStorage").Shared.utils:FindFirstChild("DebugConfig"))
-	end)
-	if ok and type(mod) == "table" then
-		DebugConfig = mod
-	end
-end
+local DebugConfigLoader = require(game:GetService("ReplicatedStorage").Shared.utils.DebugConfigLoader)
+local logger = DebugConfigLoader.createLogger("RemoteRouter")
 
 local RemoteRouter = {}
 
@@ -34,13 +26,13 @@ local CONFIG = {
 
 -- Utility functions
 local function log(level, message, ...)
-	if CONFIG.DEBUG and DebugConfig then
+	if CONFIG.DEBUG then
 		if level == "error" then
-			DebugConfig.Error(message, ...)
+			logger.Error(message, ...)
 		elseif level == "warn" then
-			DebugConfig.Warn(message, ...)
+			logger.Warn(message, ...)
 		else
-			DebugConfig.Log(message, ...)
+			logger.Log(message, ...)
 		end
 	end
 end
