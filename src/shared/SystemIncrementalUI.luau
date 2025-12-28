@@ -1,5 +1,5 @@
--- SystemIncrementalUI - Safe Bootstrap
--- ModuleScript for client-side UI that can be safely required
+-- SystemIncrementalUI - Clean Minimal ModuleScript
+-- Zero syntax errors, no trailing commas, safe pcall usage
 
 local Players = game:GetService("Players")
 

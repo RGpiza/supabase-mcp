@@ -337,7 +337,7 @@ function GitHubIssueCreator.CreateTestIssue()
 	
 	return GitHubIssueCreator.CreateIssue(
 		"SERVER_ERROR",
-		"TestService",
+		"ProductionService",
 		"This is a test issue for GitHub integration",
 		4, -- CRITICAL
 		123456789,

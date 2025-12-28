@@ -57,7 +57,6 @@ local function initializeControllers()
 	-- Lazy-loaded features
 	local prestigeUpgradesController = loadController("PrestigeUpgradesController")
 	local storeUIController = loadController("StoreUIController")
-	local testController = loadController("TestController")
 	
 	-- Initialize controllers
 	if terminalController then
@@ -82,10 +81,6 @@ local function initializeControllers()
 	
 	if storeUIController then
 		pcall(storeUIController.OnStart)
-	end
-	
-	if testController then
-		pcall(testController.OnStart)
 	end
 end
 

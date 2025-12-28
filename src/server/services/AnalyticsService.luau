@@ -175,7 +175,7 @@ end
 -- InitManager integration: register heartbeat for batch flushing
 function AnalyticsServiceModule.OnStart()
 	-- Set up periodic batch flush
-	game:GetService("RunService"):BindToHeartbeat("AnalyticsFlush", function()
+	game:GetService("RunService"):BindToRenderStep("AnalyticsFlush", Enum.RenderPriority.Last.Value, function()
 		AnalyticsServiceModule.FlushPendingEvents()
 	end)
 	
@@ -184,7 +184,7 @@ end
 
 function AnalyticsServiceModule.OnStop()
 	-- Cleanup
-	game:GetService("RunService"):UnbindFromHeartbeat("AnalyticsFlush")
+	game:GetService("RunService"):UnbindFromRenderStep("AnalyticsFlush")
 	safeLog("AnalyticsService stopped")
 end
 

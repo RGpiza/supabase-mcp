@@ -87,10 +87,6 @@ InitManager.registerService("RemoteRouter", function()
 end, "core")
 
 -- Register lazy-loaded features
-InitManager.registerLazyFeature("TestService", function()
-	local TestService = require(script.Parent.services.TestService)
-	return TestService
-end)
 
 -- Start initialization
 local success = InitManager.initialize()

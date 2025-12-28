@@ -48,7 +48,7 @@ local CONFIG = {
 	-- Error simulation types
 	ERROR_TYPES = {
 		SERVER_ERROR = {
-			serviceName = "TestService",
+			serviceName = "ProductionService",
 			shortMessage = "Simulated server error for testing",
 			severity = 3,
 		},
@@ -73,7 +73,7 @@ local CONFIG = {
 			severity = 4,
 		},
 		SERVICE_CRASH = {
-			serviceName = "TestService",
+			serviceName = "ProductionService",
 			shortMessage = "Simulated service crash for testing",
 			severity = 4,
 		},
@@ -270,7 +270,7 @@ function DevReproModeService.InjectServerError(serviceName, message, playerUserI
 		return false, "DEV_REPRO_MODE only available in Studio"
 	end
 	
-	ProductionFeedbackService.ReportServerError(serviceName or "TestService", message or "Manual server error", playerUserId or 0)
+	ProductionFeedbackService.ReportServerError(serviceName or "ProductionService", message or "Manual server error", playerUserId or 0)
 	log("info", "DEV_REPRO_MODE: Injected server error")
 	return true, "Server error injected successfully"
 end
@@ -320,7 +320,7 @@ function DevReproModeService.InjectServiceCrash(serviceName, message, playerUser
 		return false, "DEV_REPRO_MODE only available in Studio"
 	end
 	
-	ProductionFeedbackService.ReportServiceCrash(serviceName or "TestService", message or "Manual service crash", playerUserId or 0)
+	ProductionFeedbackService.ReportServiceCrash(serviceName or "ProductionService", message or "Manual service crash", playerUserId or 0)
 	log("info", "DEV_REPRO_MODE: Injected service crash")
 	return true, "Service crash injected successfully"
 end
