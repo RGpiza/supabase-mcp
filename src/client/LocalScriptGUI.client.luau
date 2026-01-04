@@ -1,15 +1,17 @@
--- Single File GUI System for System Incremental
--- Optimized consolidated GUI creation and management
--- Pure Instance.new approach with performance optimizations
+-- LocalScript GUI for System Incremental
+-- Optimized LocalScript that creates UI directly for local player
+-- No dependencies, no modules, pure Instance.new approach
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+-- Wait for local player
 local player = Players.LocalPlayer
 if not player then
 	return
 end
 
+-- Wait for PlayerGui
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- Configuration constants
@@ -287,12 +289,12 @@ end
 
 -- 8. Main Initialization
 local function initialize()
-	print("Initializing Single File GUI System...")
+	print("Initializing LocalScript GUI System...")
 	
 	-- Check if UI already exists
 	if playerGui:FindFirstChild(CONFIG.screenGuiName) then
-		print("Single File GUI already exists, skipping initialization")
-		return false
+		print("LocalScript GUI already exists, skipping initialization")
+		return
 	end
 	
 	-- Create main ScreenGui
@@ -326,38 +328,11 @@ local function initialize()
 	-- Show success notification
 	UI.notify("System Incremental GUI loaded successfully!", "success")
 	
-	print("Single File GUI System initialized successfully!")
-	return true
+	print("LocalScript GUI System initialized successfully!")
 end
 
--- 9. Public API
-local SingleFileGUI = {
-	buildUI = function()
-		if not state.isInitialized then
-			return initialize()
-		else
-			return false
-		end
-	end,
-	
-	notify = function(message, kind)
-		if UI.notify then
-			UI.notify(message, kind)
-		else
-			print("SingleFileGUI: " .. tostring(message))
-		end
-	end,
-	
-	refreshLeaderboard = function()
-		-- Placeholder for leaderboard functionality
-		UI.notify("Leaderboard refresh requested", "info")
-	end,
-	
-	refreshCommunity = function()
-		-- Placeholder for community functionality
-		UI.notify("Community refresh requested", "info")
-	end,
-	
+-- 9. Public API for external access
+local LocalScriptGUI = {
 	getState = function()
 		return state
 	end,
@@ -387,6 +362,14 @@ local SingleFileGUI = {
 		checkUpgradeAvailability()
 		UI.notify("System reset!", "warning")
 	end,
+	
+	notify = function(message, kind)
+		if UI.notify then
+			UI.notify(message, kind)
+		else
+			print("LocalScriptGUI: " .. tostring(message))
+		end
+	end,
 }
 
 -- Auto-initialize on spawn
@@ -397,4 +380,5 @@ spawn(function()
 	initialize()
 end)
 
-return SingleFileGUI
+-- Return the API for potential external use
+return LocalScriptGUI
