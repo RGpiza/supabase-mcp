@@ -1,4 +1,4 @@
--- UILoader.client.luau
+-- UILoader.client.lua
 -- Optimized LocalScript for loading the high-performance UI system
 -- Ensures proper client-side execution and initialization
 

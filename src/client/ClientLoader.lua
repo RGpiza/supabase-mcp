@@ -1,4 +1,4 @@
--- ClientLoader.client.luau
+-- ClientLoader.client.lua
 -- Optimized client-side loader for System Incremental UI
 -- Handles module loading and fallback logic efficiently
 

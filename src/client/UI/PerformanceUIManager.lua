@@ -1,4 +1,4 @@
--- PerformanceUIManager.client.luau
+-- PerformanceUIManager.client.lua
 -- High-performance UI architecture for System Incremental
 -- Optimized for minimal render overhead and efficient updates
 
@@ -149,8 +149,8 @@ end
 -- Event Handlers (No Instance.new calls)
 local function handleCPUUpgrade()
 	if UIState.data >= 100 then
-		UIState.data -= 100
-		UIState.dps += 0.5
+		UIState.data = UIState.data - 100
+		UIState.dps = UIState.dps + 0.5
 		UIEvents.dataChanged:Fire()
 		UIEvents.dpsChanged:Fire()
 		showNotification("CPU Upgrade purchased! +0.5 DPS", "success")
@@ -159,8 +159,8 @@ end
 
 local function handleRAMUpgrade()
 	if UIState.data >= 500 then
-		UIState.data -= 500
-		UIState.dps += 1.0
+		UIState.data = UIState.data - 500
+		UIState.dps = UIState.dps + 1.0
 		UIEvents.dataChanged:Fire()
 		UIEvents.dpsChanged:Fire()
 		showNotification("RAM Upgrade purchased! +1.0 DPS", "success")
@@ -169,8 +169,8 @@ end
 
 local function handleStorageUpgrade()
 	if UIState.data >= 1000 then
-		UIState.data -= 1000
-		UIState.dps += 2.0
+		UIState.data = UIState.data - 1000
+		UIState.dps = UIState.dps + 2.0
 		UIEvents.dataChanged:Fire()
 		UIEvents.dpsChanged:Fire()
 		showNotification("Storage Upgrade purchased! +2.0 DPS", "success")
@@ -179,7 +179,7 @@ end
 
 local function handlePrestige()
 	if UIState.data >= 10000 then
-		UIState.prestigeLevel += 1
+		UIState.prestigeLevel = UIState.prestigeLevel + 1
 		UIState.data = 0
 		UIState.dps = 1
 		UIEvents.dataChanged:Fire()
@@ -305,7 +305,7 @@ local function startAutoProduction()
 		while true do
 			task.wait(1)
 			if UIState.isInitialized then
-				UIState.data += UIState.dps
+				UIState.data = UIState.data + UIState.dps
 				UIEvents.dataChanged:Fire()
 				UIEvents.upgradeAvailabilityChanged:Fire()
 			end
